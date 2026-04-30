@@ -1,0 +1,11 @@
+{
+    "version": "1.0",
+    "file_records": [
+        {
+            "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/Unitree/aliengo/configuration/materials/textures/trunk_uv_base_final.png",
+            "source_hash": "0c4609b4a00dbdffc8b89cf62d07828f11416644",
+            "target_url": "./configuration/materials/textures/trunk_uv_base_final.png",
+            "target_hash": "9c1c99c539ad6dc2999aa7c599314da3377a9fae"
+        }
+    ]
+}

@@ -1,0 +1,31 @@
+step/trajectory_log.csv
+step/runs
+still/trajectory_log.csv
+still/runs
+usd/
+.idea/
+outputs
+__pycache__
+step/trajectory_log.zarr/
+still/trajectory_log.zarr/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.cl*
+# Training artifacts
+*.pt
+*.npy
+*.zarr/
+*.csv
+runs/
+sweep.db
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
