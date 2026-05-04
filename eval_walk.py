@@ -111,7 +111,7 @@ class WalkKinematics:
         return q
 
     def compute_leg_ik(self, leg_idx, target_pos_world, q_current,
-                       eps=1e-4, max_iter=100, dt=0.1):
+                       eps=1e-4, max_iter=100, dt=0.05):
         frame_id = self.foot_frame_ids[leg_idx]
         q = q_current.copy()
         v_base = 6 if self.has_floating_base else 0
@@ -135,7 +135,7 @@ class WalkKinematics:
         return q, False, np.linalg.norm(err)
 
     def compute_leg_ik_body_centric(self, leg_idx, target_pos_world, body_cmd_vel_world, q_current,
-                                    target_vel_world=None, eps=1e-4, max_iter=100, dt=0.1, kd=10.0):
+                                    target_vel_world=None, eps=1e-4, max_iter=100, dt=0.05, kd=10.0):
         """
         Risolve l'IK nel frame locale (Body-Centric).
         - target_pos_world: dove vogliamo il piede (nel mondo)
@@ -318,7 +318,7 @@ class WalkKinematics:
 
 def generate_combined_ik(kin : WalkKinematics, q_start, body_start, body_goal,
                          stepping_leg, foot_start_body, foot_goal_body,
-                         num_steps=20, step_height=0.05):
+                         num_steps=20, step_height=0.05, dt=0.05):
     """Generate IK ground truth for combined body shift + leg step.
 
     At each timestep:
@@ -350,13 +350,13 @@ def generate_combined_ik(kin : WalkKinematics, q_start, body_start, body_goal,
             if leg_idx == stepping_leg:
                 continue
             target = kin.feet_world_positions[leg_idx]
-            q_current, _, _ = kin.compute_leg_ik_body_centric(leg_idx, target, body_vel, q_current)
-            q_current2, _, _ = kin.compute_leg_ik(leg_idx, target, q_current)
+            q_current, _, _ = kin.compute_leg_ik_body_centric(leg_idx, target, body_vel, q_current, dt=dt)
+            q_current2, _, _ = kin.compute_leg_ik(leg_idx, target, q_current, dt=dt)
 
         # Stepping leg: cycloid waypoint (body frame → world)
         foot_world = kin.body_to_world(cycloid_waypoints[step], q_current)
-        q_current, _, _ = kin.compute_leg_ik(stepping_leg, foot_world, q_current)
-        q_current2, _, _ = kin.compute_leg_ik(stepping_leg, foot_world, q_current)
+        q_current, _, _ = kin.compute_leg_ik(stepping_leg, foot_world, q_current, dt=dt)
+        q_current2, _, _ = kin.compute_leg_ik(stepping_leg, foot_world, q_current, dt=dt)
 
         angles = kin.get_joint_angles(q_current)
         trajectory.append(angles)
@@ -577,7 +577,7 @@ def evaluate_walk(trunk_model_path, step_model_path, num_walk_steps=8,
         ik_traj, _, ik_traj_classic = generate_combined_ik(
             kin, q_current, body_pos, body_goal,
             leg_idx, foot_start_body, foot_goal_body,
-            num_steps=NUM_TRAJ_STEPS, step_height=STEP_HEIGHT
+            num_steps=NUM_TRAJ_STEPS, step_height=STEP_HEIGHT, dt=dt
         )
         t_ik = time.perf_counter() - t_ik_start
 
