@@ -97,17 +97,22 @@ def generate_trajectory(seed):
         return None
 
     trajectory_joints = []
+    body_positions, body_velocities = kin.compute_spline_target_cmd(start_pos, goal_pos, NUM_TRAJ_STEPS)
     for step in range(NUM_TRAJ_STEPS):
         alpha = step / (NUM_TRAJ_STEPS - 1)
-        current_pos = start_pos + alpha * (goal_pos - start_pos)
+        # current_pos = start_pos + alpha * (goal_pos - start_pos)
+        current_pos = body_positions[step]
+        current_vel = body_velocities[step]
         current_rpy = start_rpy + alpha * (goal_rpy - start_rpy)
         R = rotation_rpy(*current_rpy)
 
-        q_new, ok = kin.solve_stance(
-            body_translation=current_pos, body_rotation=R, q_init=q_current,
+        # q_new, ok = kin.solve_stance(
+        #     body_translation=current_pos, body_rotation=R, q_init=q_current,
+        # )
+        q_new, _ = kin.solve_stance_vel(
+            body_translation=current_pos, body_rotation=R, q_init=q_current, body_vel=current_vel,
         )
-        if not ok:
-            return None
+
         q_current = q_new
         angles = kin.get_joint_angles(q_new)
         if not check_joint_limits(angles):
@@ -124,7 +129,7 @@ def main():
 
     print(f"Generating {num_trajectories} trajectories using {num_workers} workers...")
 
-    root = zarr.open_group("still/trajectory_log.zarr", mode="w")
+    root = zarr.open_group("still/trajectory_log_vel.zarr", mode="w")
     start_positions = root.zeros("start_positions", shape=(num_trajectories, 3), dtype=np.float32)
     goal_positions = root.zeros("goal_positions", shape=(num_trajectories, 3), dtype=np.float32)
     start_rpys = root.zeros("start_rpys", shape=(num_trajectories, 3), dtype=np.float32)
@@ -158,6 +163,30 @@ def main():
                 batch_start_rpys.append(sr)
                 batch_goal_rpys.append(gr)
                 batch_joints.append(tj)
+
+                plot = False
+                if plot:
+                    import matplotlib.pyplot as plt
+                    print("plotting")
+                    tj_numpy = np.array(tj)
+                    # IK comparison plot (updated each walk step)
+                    JOINT_NAMES = ["hip", "thigh", "calf"]
+                    LEG_NAMES = ["FL", "FR", "RL", "RR"]
+                    fig2, axes2 = plt.subplots(4, 3, figsize=(14, 10))
+                    offset_trl = np.array(gp) - np.array(sp)
+                    offset_rot = np.array(gr) - np.array(gp)
+                    fig2.suptitle(f"{offset_trl}, \n\n {offset_rot}")
+                    for leg in range(4):
+                        for j in range(3):
+                            ax = axes2[leg, j]
+                            ax.set_title(f"{LEG_NAMES[leg]} {JOINT_NAMES[j]}")
+                            ax.set_xlabel("step")
+                            ax.set_ylabel("rad")
+                            ax.plot(np.arange(NUM_TRAJ_STEPS), tj_numpy[:, leg*j], "r", label="CLIK")
+                            if leg == 0 and j == 0:
+                                ax.legend(loc="upper left", fontsize=7)
+                    fig2.tight_layout()
+                    plt.show()
 
                 if len(batch_starts) >= batch_size:
                     end = completed + len(batch_starts)
