@@ -53,6 +53,7 @@ NUM_TRAJ_STEPS = 20
 STEP_HEIGHT = 0.05
 LEG_IS_RIGHT = {0: False, 1: True, 2: False, 3: True}
 MIRROR_LEG = {0: 1, 1: 0, 2: 3, 3: 2}  # FL<->FR, RL<->RR
+SHOW_PLOTS = False
 
 
 # =============================================================================
@@ -111,7 +112,7 @@ class WalkKinematics:
         return q
 
     def compute_leg_ik(self, leg_idx, target_pos_world, q_current,
-                       eps=1e-4, max_iter=100, dt=0.05):
+                       eps=1e-4, max_iter=100, dt=0.1):
         frame_id = self.foot_frame_ids[leg_idx]
         q = q_current.copy()
         v_base = 6 if self.has_floating_base else 0
@@ -134,72 +135,70 @@ class WalkKinematics:
             q = pin.integrate(self.model, q, v_full * dt)
         return q, False, np.linalg.norm(err)
 
-    def compute_leg_ik_body_centric(self, leg_idx, target_pos_world, body_cmd_vel_world, q_current,
-                                    target_vel_world=None, eps=1e-4, max_iter=100, dt=0.05, kd=10.0):
+    def compute_leg_clik_body_centric(self, leg_idx, target_pos_world, body_cmd_vel_world, q_current,
+                                      target_vel_world=None, dt=0.05, kd=10.0, max_joint_vel=5.0):
         """
-        Risolve l'IK nel frame locale (Body-Centric).
-        - target_pos_world: dove vogliamo il piede (nel mondo)
-        - target_vel_world: velocità del piede nel mondo (0 per Stance, v_cicloide per Swing)
-        - body_cmd_vel_world: velocità a cui si sta muovendo il trunk
+        Risolve il CLIK nel frame locale (Body-Centric) per inseguire una traiettoria dinamica.
+        Esegue UN SOLO step di integrazione basato sul tempo (dt).
         """
         frame_id = self.foot_frame_ids[leg_idx]
         q = q_current.copy()
+
+        # Indici dei giunti
         v_base = 6 if self.has_floating_base else 0
         leg_v_start = v_base + leg_idx * 3
         leg_v_end = leg_v_start + 3
+
+        # Sicurezza sui tipi di dato (meglio di moltiplicare per 0.)
         if target_vel_world is None:
             target_vel_world = np.zeros(3)
 
-        for _ in range(max_iter):
-            # Aggiorniamo la cinematica UNA SOLA VOLTA per iterazione
-            pin.forwardKinematics(self.model, self.data, q)
-            pin.updateFramePlacements(self.model, self.data)
+        # 1. Aggiornamento Cinematica (Fatto una sola volta!)
+        pin.forwardKinematics(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
 
-            # 1. Estrazione della posa del Body (equivalente a oMb nei tuoi metodi)
-            oMb = self.data.oMf[self.body_frame_id]
+        # 2. Estrazione della posa del Body
+        oMb = self.data.oMf[self.body_frame_id]
 
-            # 2. CONVERSIONE POSIZIONI PIEDI DA WORLD A BODY LOCALE
-            target_pos_local = oMb.actInv(np.array(target_pos_world))
-            current_pos_local = oMb.actInv(self.data.oMf[frame_id].translation)
+        # 3. CONVERSIONE POSIZIONI DA WORLD A BODY LOCALE
+        target_pos_local = oMb.actInv(np.array(target_pos_world))
+        current_pos_local = oMb.actInv(self.data.oMf[frame_id].translation)
 
-            # L'errore ora è puro e visto "dagli occhi" del body
-            err_local = target_pos_local - current_pos_local
+        # Errore puro visto dal body
+        err_local = target_pos_local - current_pos_local
 
-            if np.linalg.norm(err_local) < eps:
-                return q, True, np.linalg.norm(err_local)
+        # 4. CONVERSIONE VELOCITÀ DA WORLD A BODY LOCALE
+        R_body_inv = oMb.rotation.T
+        foot_vel_local = R_body_inv @ np.array(target_vel_world)
+        body_vel_local = R_body_inv @ np.array(body_cmd_vel_world)
 
-            # 3. CONVERSIONE VELOCITÀ DA WORLD A BODY LOCALE
-            # Ruotiamo le velocità moltiplicandole per la Trasposta della rotazione del body
-            R_body_inv = oMb.rotation.T
-            foot_vel_local = R_body_inv @ np.array(target_vel_world)
-            body_vel_local = R_body_inv @ np.array(body_cmd_vel_world)
+        # 5. VELOCITÀ RELATIVA (Tapis Roulant)
+        target_vel_local = foot_vel_local - body_vel_local
 
-            # 4. VELOCITÀ RELATIVA (Effetto Tapis Roulant)
-            # La vera velocità target che i giunti devono creare è la differenza tra
-            # come si muove il piede e come si muove il tronco.
-            target_vel_local = foot_vel_local - body_vel_local
+        # 6. Legge CLIK (Feedforward + Proporzionale sull'errore)
+        v_task_local = target_vel_local + (kd * err_local)
 
-            # Legge CLIK calcolata interamente in locale
-            v_task_local = target_vel_local + (kd * err_local)
+        # 7. JACOBIANO ROTAZIONALE
+        J_world = pin.computeFrameJacobian(
+            self.model, self.data, q, frame_id, pin.LOCAL_WORLD_ALIGNED
+        )[:3, leg_v_start:leg_v_end]
 
-            # 5. JACOBIANO ROTAZIONALE
-            # Lo Jacobiano WORLD_ALIGNED calcola l'influenza dei giunti rispetto agli assi globali.
-            # Per usarlo con il nostro v_task_local, dobbiamo ruotare anche lui!
-            J_world = pin.computeFrameJacobian(
-                self.model, self.data, q, frame_id, pin.LOCAL_WORLD_ALIGNED
-            )[:3, leg_v_start:leg_v_end]
+        J_local = R_body_inv @ J_world
 
-            J_local = R_body_inv @ J_world
+        # 8. Risoluzione Damped Least Squares
+        damp = 1e-6
+        v_joint = J_local.T @ np.linalg.solve(J_local @ J_local.T + damp * np.eye(3), v_task_local)
 
-            # 6. Risoluzione Damped Least Squares
-            damp = 1e-6
-            v = J_local.T @ np.linalg.solve(J_local @ J_local.T + damp * np.eye(3), v_task_local)
+        # 9. Sicurezza (Clipping velocità motori)
+        v_joint = np.clip(v_joint, -max_joint_vel, max_joint_vel)
 
-            v_full = np.zeros(self.model.nv)
-            v_full[leg_v_start:leg_v_end] = v
-            q = pin.integrate(self.model, q, v_full * dt)
+        # 10. INTEGRAZIONE NEL TEMPO
+        v_full = np.zeros(self.model.nv)
+        v_full[leg_v_start:leg_v_end] = v_joint
+        q_new = pin.integrate(self.model, q, v_full * dt)
 
-        return q, False, np.linalg.norm(err_local)
+        # Ritorno la nuova posa e la norma dell'errore (per il logging)
+        return q_new, np.linalg.norm(err_local)
 
     def generate_cycloid_waypoints(self, start_pos, target_pos, step_height, num_points):
         start_pos = np.array(start_pos)
@@ -259,7 +258,7 @@ class WalkKinematics:
             for fid in self.foot_frame_ids
         ]
 
-    def compute_spline_target_cmd(self, body_start, body_goal, num_steps, plot=False):
+    def compute_spline_target_cmd(self, body_start, body_goal, num_steps):
 
         # 1. Definisci SOLO i keyframe (inizio e fine)
         key_alphas = [0.0, 1.0]
@@ -275,7 +274,7 @@ class WalkKinematics:
         body_positions = cubic_spline(alphas)
         body_velocities = cubic_spline(alphas, 1)  # Derivata prima = velocità
 
-        if plot:
+        if SHOW_PLOTS:
             # --- Creazione dei Grafici ---
             # Creiamo una figura con 3 righe e 1 colonna, condividendo l'asse X
             fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
@@ -318,7 +317,7 @@ class WalkKinematics:
 
 def generate_combined_ik(kin : WalkKinematics, q_start, body_start, body_goal,
                          stepping_leg, foot_start_body, foot_goal_body,
-                         num_steps=20, step_height=0.05, dt=0.05):
+                         num_steps=20, step_height=0.05):
     """Generate IK ground truth for combined body shift + leg step.
 
     At each timestep:
@@ -335,7 +334,6 @@ def generate_combined_ik(kin : WalkKinematics, q_start, body_start, body_goal,
     body_positions, body_velocities = kin.compute_spline_target_cmd(body_start, body_goal, num_steps)
 
     trajectory = []
-    trajectory_classic = []
     q_current = q_start.copy()
 
     for step in range(num_steps):
@@ -350,21 +348,60 @@ def generate_combined_ik(kin : WalkKinematics, q_start, body_start, body_goal,
             if leg_idx == stepping_leg:
                 continue
             target = kin.feet_world_positions[leg_idx]
-            q_current, _, _ = kin.compute_leg_ik_body_centric(leg_idx, target, body_vel, q_current, dt=dt)
-            q_current2, _, _ = kin.compute_leg_ik(leg_idx, target, q_current, dt=dt)
+            q_current, _ = kin.compute_leg_clik_body_centric(leg_idx, target, body_vel, q_current)
 
         # Stepping leg: cycloid waypoint (body frame → world)
         foot_world = kin.body_to_world(cycloid_waypoints[step], q_current)
-        q_current, _, _ = kin.compute_leg_ik(stepping_leg, foot_world, q_current, dt=dt)
-        q_current2, _, _ = kin.compute_leg_ik(stepping_leg, foot_world, q_current, dt=dt)
+        q_current, _, _ = kin.compute_leg_ik(stepping_leg, foot_world, q_current)
 
         angles = kin.get_joint_angles(q_current)
         trajectory.append(angles)
 
-        angles2 = kin.get_joint_angles(q_current2)
-        trajectory_classic.append(angles2)
+    if SHOW_PLOTS:
+        trajectory2 = []
+        q_current = q_start.copy()
 
-    return np.array(trajectory), q_current, np.array(trajectory_classic)
+        for step in range(num_steps):
+            body_pos = body_positions[step]
+            body_vel = body_velocities[step]
+
+            # Set body position
+            q_current = kin.set_body_pose(q_current, body_pos)
+
+            # Non-stepping legs: IK to pinned world positions
+            for leg_idx in range(4):
+                if leg_idx == stepping_leg:
+                    continue
+                target = kin.feet_world_positions[leg_idx]
+                q_current, _, _ = kin.compute_leg_ik(leg_idx, target, q_current)
+
+            # Stepping leg: cycloid waypoint (body frame → world)
+            foot_world = kin.body_to_world(cycloid_waypoints[step], q_current)
+            q_current, _, _ = kin.compute_leg_ik(stepping_leg, foot_world, q_current)
+
+            angles = kin.get_joint_angles(q_current)
+            trajectory2.append(angles)
+
+        tj = np.array(trajectory)
+        tj2 = np.array(trajectory2)
+        # IK comparison plot (updated each walk step)
+        JOINT_NAMES = ["hip", "thigh", "calf"]
+        LEG_NAMES = ["FL", "FR", "RL", "RR"]
+        fig2, axes2 = plt.subplots(4, 3, figsize=(14, 10))
+        fig2.suptitle("IK (dashed) vs CLIK (solid)")
+        for leg in range(4):
+            for j in range(3):
+                ax = axes2[leg, j]
+                ax.set_title(f"{LEG_NAMES[leg]} {JOINT_NAMES[j]}")
+                ax.set_xlabel("step")
+                ax.set_ylabel("rad")
+                ax.plot(np.arange(NUM_TRAJ_STEPS), tj[:, leg * j], "r", label="CLIK")
+                ax.plot(np.arange(NUM_TRAJ_STEPS), tj[:, leg * j], "g--", label="IK CLASSIC")
+                if leg == 0 and j == 0:
+                    ax.legend(loc="upper left", fontsize=7)
+        fig2.tight_layout()
+        plt.show()
+    return np.array(trajectory), q_current
 
 
 # =============================================================================
@@ -496,44 +533,44 @@ def evaluate_walk(trunk_model_path, step_model_path, num_walk_steps=8,
     all_ik_times = []
 
     # Real-time foot position plots
-    plt.ion()
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle("Foot World Positions")
-    axes = axes.flatten()
-    foot_history = {i: {"x": [], "y": [], "z": []} for i in range(4)}
-    frame_count = 0
-    foot_lines = {}
-    for i, ax in enumerate(axes):
-        ax.set_title(LEG_NAMES[i])
-        ax.set_xlabel("frame")
-        ax.set_ylabel("position (m)")
-        lx, = ax.plot([], [], label="x")
-        ly, = ax.plot([], [], label="y")
-        lz, = ax.plot([], [], label="z")
-        ax.legend(loc="upper left")
-        foot_lines[i] = (lx, ly, lz)
-    fig.tight_layout()
-    plt.show()
+    if SHOW_PLOTS:
+        plt.ion()
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        fig.suptitle("Foot World Positions")
+        axes = axes.flatten()
+        foot_history = {i: {"x": [], "y": [], "z": []} for i in range(4)}
+        frame_count = 0
+        foot_lines = {}
+        for i, ax in enumerate(axes):
+            ax.set_title(LEG_NAMES[i])
+            ax.set_xlabel("frame")
+            ax.set_ylabel("position (m)")
+            lx, = ax.plot([], [], label="x")
+            ly, = ax.plot([], [], label="y")
+            lz, = ax.plot([], [], label="z")
+            ax.legend(loc="upper left")
+            foot_lines[i] = (lx, ly, lz)
+        fig.tight_layout()
+        plt.show()
 
-    # Diffusion vs IK comparison plot (updated each walk step)
-    JOINT_NAMES = ["hip", "thigh", "calf"]
-    fig2, axes2 = plt.subplots(4, 3, figsize=(14, 10))
-    fig2.suptitle("Diffusion (solid) vs IK (dashed)")
-    cmp_lines = {}
-    for leg in range(4):
-        for j in range(3):
-            ax = axes2[leg, j]
-            ax.set_title(f"{LEG_NAMES[leg]} {JOINT_NAMES[j]}")
-            ax.set_xlabel("step")
-            ax.set_ylabel("rad")
-            l_diff, = ax.plot([], [], "b-", label="diffusion")
-            l_ik, = ax.plot([], [], "r--", label="IK")
-            l_ik_classic, = ax.plot([], [], "g-", label="IK Classic", alpha=0.5)
-            if leg == 0 and j == 0:
-                ax.legend(loc="upper left", fontsize=7)
-            cmp_lines[(leg, j)] = (l_diff, l_ik, l_ik_classic)
-    fig2.tight_layout()
-    plt.show()
+        # Diffusion vs IK comparison plot (updated each walk step)
+        JOINT_NAMES = ["hip", "thigh", "calf"]
+        fig2, axes2 = plt.subplots(4, 3, figsize=(14, 10))
+        fig2.suptitle("Diffusion (solid) vs IK (dashed)")
+        cmp_lines = {}
+        for leg in range(4):
+            for j in range(3):
+                ax = axes2[leg, j]
+                ax.set_title(f"{LEG_NAMES[leg]} {JOINT_NAMES[j]}")
+                ax.set_xlabel("step")
+                ax.set_ylabel("rad")
+                l_diff, = ax.plot([], [], "b-", label="diffusion")
+                l_ik, = ax.plot([], [], "r--", label="IK")
+                if leg == 0 and j == 0:
+                    ax.legend(loc="upper left", fontsize=7)
+                cmp_lines[(leg, j)] = (l_diff, l_ik)
+        fig2.tight_layout()
+        plt.show()
 
     for walk_step in range(num_walk_steps):
         leg_idx = walk_step % 4
@@ -574,10 +611,10 @@ def evaluate_walk(trunk_model_path, step_model_path, num_walk_steps=8,
         foot_start_body = actual_foot_body.copy()
         foot_goal_body = actual_foot_body + corrected_delta_foot
         t_ik_start = time.perf_counter()
-        ik_traj, _, ik_traj_classic = generate_combined_ik(
+        ik_traj, _ = generate_combined_ik(
             kin, q_current, body_pos, body_goal,
             leg_idx, foot_start_body, foot_goal_body,
-            num_steps=NUM_TRAJ_STEPS, step_height=STEP_HEIGHT, dt=dt
+            num_steps=NUM_TRAJ_STEPS, step_height=STEP_HEIGHT
         )
         t_ik = time.perf_counter() - t_ik_start
 
@@ -594,27 +631,28 @@ def evaluate_walk(trunk_model_path, step_model_path, num_walk_steps=8,
         print(f"  Max error:  {max_error:.6f} rad ({np.rad2deg(max_error):.4f} deg)")
         print(f"  IK time: {t_ik * 1000:.1f} ms | Speedup: {t_ik/t_diff:.1f}x")
 
-        # Update diffusion vs IK comparison plot
-        steps_x = np.arange(NUM_TRAJ_STEPS)
-        for leg in range(4):
-            for j in range(3):
-                ji = leg * 3 + j
-                l_diff, l_ik, l_ik_classic = cmp_lines[(leg, j)]
-                l_diff.set_data(steps_x, diff_traj[:, ji])
-                l_ik.set_data(steps_x, ik_traj[:, ji])
-                l_ik_classic.set_data(steps_x, ik_traj_classic[:, ji])
-                ax2 = axes2[leg, j]
-                ax2.relim()
-                ax2.autoscale_view()
-        fig2.suptitle(f"Diffusion vs IK — step {walk_step+1} ({leg_name})")
-        fig2.canvas.draw_idle()
-        fig2.canvas.flush_events()
+        if SHOW_PLOTS:
+            # Update diffusion vs IK comparison plot
+            steps_x = np.arange(NUM_TRAJ_STEPS)
+            for leg in range(4):
+                for j in range(3):
+                    ji = leg * 3 + j
+                    l_diff, l_ik = cmp_lines[(leg, j)]
+                    l_diff.set_data(steps_x, diff_traj[:, ji])
+                    l_ik.set_data(steps_x, ik_traj[:, ji])
+                    ax2 = axes2[leg, j]
+                    ax2.relim()
+                    ax2.autoscale_view()
+            fig2.suptitle(f"Diffusion vs IK — step {walk_step+1} ({leg_name})")
+            fig2.canvas.draw_idle()
+            fig2.canvas.flush_events()
 
         input(f"  [Enter to continue to next step...]")
 
-        # Mark walk step boundary on plots
-        for ax in axes:
-            ax.axvline(x=frame_count, color="gray", linestyle="--", linewidth=0.8)
+        if SHOW_PLOTS:
+            # Mark walk step boundary on plots
+            for ax in axes:
+                ax.axvline(x=frame_count, color="gray", linestyle="--", linewidth=0.8)
 
         # --- Visualize / advance state ---
         for step in range(NUM_TRAJ_STEPS):
@@ -633,24 +671,25 @@ def evaluate_walk(trunk_model_path, step_model_path, num_walk_steps=8,
                 viz.display(q_current)
                 time.sleep(dt)
 
-            # Update foot position plots
-            pin.forwardKinematics(kin.model, kin.data, q_current)
-            pin.updateFramePlacements(kin.model, kin.data)
-            for i in range(4):
-                pos = kin.data.oMf[kin.foot_frame_ids[i]].translation
-                foot_history[i]["x"].append(pos[0])
-                foot_history[i]["y"].append(pos[1])
-                foot_history[i]["z"].append(pos[2])
-                lx, ly, lz = foot_lines[i]
-                frames = range(len(foot_history[i]["x"]))
-                lx.set_data(frames, foot_history[i]["x"])
-                ly.set_data(frames, foot_history[i]["y"])
-                lz.set_data(frames, foot_history[i]["z"])
-                axes[i].relim()
-                axes[i].autoscale_view()
-            frame_count += 1
-            fig.canvas.draw_idle()
-            fig.canvas.flush_events()
+            if SHOW_PLOTS:
+                # Update foot position plots
+                pin.forwardKinematics(kin.model, kin.data, q_current)
+                pin.updateFramePlacements(kin.model, kin.data)
+                for i in range(4):
+                    pos = kin.data.oMf[kin.foot_frame_ids[i]].translation
+                    foot_history[i]["x"].append(pos[0])
+                    foot_history[i]["y"].append(pos[1])
+                    foot_history[i]["z"].append(pos[2])
+                    lx, ly, lz = foot_lines[i]
+                    frames = range(len(foot_history[i]["x"]))
+                    lx.set_data(frames, foot_history[i]["x"])
+                    ly.set_data(frames, foot_history[i]["y"])
+                    lz.set_data(frames, foot_history[i]["z"])
+                    axes[i].relim()
+                    axes[i].autoscale_view()
+                frame_count += 1
+                fig.canvas.draw_idle()
+                fig.canvas.flush_events()
 
         body_pos = body_goal.copy()
         current_joints_12 = kin.get_joint_angles(q_current)
