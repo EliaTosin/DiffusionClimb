@@ -1,3 +1,5 @@
+import sys
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,7 +8,8 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import zarr
 import math
-
+from ink_kin_stance.diffusion.model import ConditionalDiffusionModel, ConditionalDropOutDiffusionModel
+from ink_kin_stance.diffusion.gaussian_diffusion import GaussianDiffusion
 # Dataset
 
 class TrajectoryDataset(Dataset):
@@ -148,204 +151,6 @@ def extract(a, t, x_shape):
     batch_size = t.shape[0]
     out = a.gather(-1, t)
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1)))
-
-
-class GaussianDiffusion:
-    def __init__(self, num_timesteps=1000, beta_start=1e-4, beta_end=0.02, device="cuda"):
-        self.num_timesteps = num_timesteps
-        self.device = device
-
-        # Beta schedule
-        self.betas = get_beta_schedule(num_timesteps, beta_start, beta_end).to(device)
-        self.alphas = 1.0 - self.betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
-        self.alphas_cumprod_prev = F.pad(self.alphas_cumprod[:-1], (1, 0), value=1.0)
-
-        # Calculations for diffusion q(x_t | x_0)
-        self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
-        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)
-
-        # Calculations for posterior q(x_{t-1} | x_t, x_0)
-        self.posterior_variance = self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
-        self.sqrt_recip_alphas = torch.sqrt(1.0 / self.alphas)
-
-    def q_sample(self, x_0, t, noise=None):
-        """Forward diffusion: q(x_t | x_0)."""
-        if noise is None:
-            noise = torch.randn_like(x_0)
-        sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x_0.shape)
-        sqrt_one_minus_alphas_cumprod_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_0.shape)
-        return sqrt_alphas_cumprod_t * x_0 + sqrt_one_minus_alphas_cumprod_t * noise
-
-    def p_losses(self, model, x_0, t, condition, noise=None):
-        """Training loss: predict noise."""
-        if noise is None:
-            noise = torch.randn_like(x_0)
-        x_t = self.q_sample(x_0, t, noise)
-        predicted_noise = model(x_t, t, condition)
-        return F.mse_loss(predicted_noise, noise)
-
-    @torch.no_grad()
-    # def p_sample(self, model, x_t, t, condition):
-    def p_sample(self, model, x_t, t, condition, gen):
-
-        """Reverse diffusion: sample x_{t-1} from x_t."""
-        betas_t = extract(self.betas, t, x_t.shape)
-        sqrt_one_minus_alphas_cumprod_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
-        sqrt_recip_alphas_t = extract(self.sqrt_recip_alphas, t, x_t.shape)
-
-        # Predict x_0 direction
-        predicted_noise = model(x_t, t, condition)
-        model_mean = sqrt_recip_alphas_t * (x_t - betas_t * predicted_noise / sqrt_one_minus_alphas_cumprod_t)
-
-        if t[0] == 0:
-            return model_mean
-        else:
-            posterior_variance_t = extract(self.posterior_variance, t, x_t.shape)
-            # noise = torch.randn_like(x_t)
-            noise = torch.randn(x_t.shape, dtype=x_t.dtype, device=x_t.device, generator=gen)
-            return model_mean + torch.sqrt(posterior_variance_t) * noise
-
-    @torch.no_grad()
-    def sample(self, model, condition, shape):
-        """Generate samples from noise (full DDPM, all timesteps)."""
-        device = condition.device
-        gen = torch.Generator(device=device)
-        gen.manual_seed(42)
-        x = torch.randn(shape, device=device, generator=gen)
-        # x = torch.randn(shape, device=device)
-
-        for t in reversed(range(self.num_timesteps)):
-            t_batch = torch.full((shape[0],), t, device=device, dtype=torch.long)
-            # x = self.p_sample(model, x, t_batch, condition)
-            x = self.p_sample(model, x, t_batch, condition, gen)
-
-        return x
-
-    @torch.no_grad()
-    def ddim_sample(self, model, condition, shape, ddim_steps=50, eta=0.0):
-        """Fast DDIM sampling with fewer steps. Works with existing trained model.
-
-        ddim_steps: number of denoising steps (e.g. 50 instead of 1000)
-        eta: 0.0 = deterministic (DDIM), 1.0 = stochastic (DDPM-like)
-        """
-        device = condition.device
-        x = torch.randn(shape, device=device)
-
-        # Subsequence of timesteps: evenly spaced
-        step_size = self.num_timesteps // ddim_steps
-        timesteps = list(range(0, self.num_timesteps, step_size))
-        timesteps = list(reversed(timesteps))
-
-        for i, t in enumerate(timesteps):
-            t_batch = torch.full((shape[0],), t, device=device, dtype=torch.long)
-
-            # Predict noise
-            predicted_noise = model(x, t_batch, condition)
-
-            # Current and previous alpha_cumprod
-            alpha_t = self.alphas_cumprod[t]
-            alpha_prev = self.alphas_cumprod[timesteps[i + 1]] if i + 1 < len(timesteps) else torch.tensor(1.0, device=device)
-
-            # Predict x_0
-            x0_pred = (x - torch.sqrt(1 - alpha_t) * predicted_noise) / torch.sqrt(alpha_t)
-
-            # Direction pointing to x_t
-            sigma = eta * torch.sqrt((1 - alpha_prev) / (1 - alpha_t) * (1 - alpha_t / alpha_prev))
-            dir_xt = torch.sqrt(1 - alpha_prev - sigma ** 2) * predicted_noise
-
-            # DDIM step
-            x = torch.sqrt(alpha_prev) * x0_pred + dir_xt
-            if sigma > 0 and i + 1 < len(timesteps):
-                x = x + sigma * torch.randn_like(x)
-
-        return x
-
-
-# =============================================================================
-# Model Architecture
-# =============================================================================
-
-class SinusoidalPositionEmbeddings(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, t):
-        device = t.device
-        t = t.float()  # Convert to float for embedding computation
-        half_dim = self.dim // 2
-        embeddings = math.log(10000) / (half_dim - 1)
-        embeddings = torch.exp(torch.arange(half_dim, device=device, dtype=torch.float32) * -embeddings)
-        embeddings = t[:, None] * embeddings[None, :]
-        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
-        return embeddings
-
-
-class ConditionalDiffusionModel(nn.Module):
-    def __init__(self, num_steps=20, num_joints=12, condition_dim=8, hidden_dim=512, time_dim=256, num_blocks=4):
-        super().__init__()
-        self.num_steps = num_steps
-        self.num_joints = num_joints
-        self.traj_dim = num_steps * num_joints
-
-        # Time embedding
-        self.time_mlp = nn.Sequential(
-            SinusoidalPositionEmbeddings(time_dim),
-            nn.Linear(time_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
-
-        # Condition embedding (delta_pos + current_joints)
-        self.condition_mlp = nn.Sequential(
-            nn.Linear(condition_dim, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
-
-        # Main denoising network
-        self.input_proj = nn.Linear(self.traj_dim, hidden_dim)
-
-        self.blocks = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden_dim * 3, hidden_dim),  # input + time + condition
-                nn.LayerNorm(hidden_dim),
-                nn.GELU(),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.LayerNorm(hidden_dim),
-                nn.GELU(),
-            )
-            for _ in range(num_blocks)
-        ])
-
-        self.output_proj = nn.Linear(hidden_dim, self.traj_dim)
-
-    def forward(self, x, t, condition):
-        """
-        x: (batch, num_steps, num_joints) - noisy trajectory
-        t: (batch,) - timestep
-        condition: (batch, 15) - [delta_pos (3), current_joints (12)]
-        """
-        batch_size = x.shape[0]
-
-        # Flatten trajectory
-        x_flat = x.view(batch_size, -1)  # (batch, num_steps * num_joints)
-
-        # Embeddings
-        t_emb = self.time_mlp(t)  # (batch, hidden_dim)
-        c_emb = self.condition_mlp(condition)  # (batch, hidden_dim)
-        x_emb = self.input_proj(x_flat)  # (batch, hidden_dim)
-
-        # Process through blocks with residual connections
-        h = x_emb
-        for block in self.blocks:
-            h_in = torch.cat([h, t_emb, c_emb], dim=-1)
-            h = h + block(h_in)
-
-        # Output predicted noise
-        out = self.output_proj(h)
-        return out.view(batch_size, self.num_steps, self.num_joints)
 
 
 # =============================================================================
@@ -536,15 +341,29 @@ def train(
 
 def load_model(save_path="diffusion_model.pt", device="cpu"):
     checkpoint = torch.load(save_path, map_location=device, weights_only=False)
+    if checkpoint.get("dropout", None) is None:
+        print("Cannot find 'dropout' key in checkpoint")
+        sys.exit(-1)
 
-    model = ConditionalDiffusionModel(
-        num_steps=checkpoint["num_steps"],
-        num_joints=checkpoint["num_joints"],
-        condition_dim=checkpoint.get("condition_dim", 6),
-        hidden_dim=checkpoint.get("hidden_dim", 512),
-        time_dim=checkpoint.get("time_dim", 256),
-        num_blocks=checkpoint.get("num_blocks", 4),
-    ).to(device)
+    if checkpoint['dropout'] > 0.0:
+        model = ConditionalDropOutDiffusionModel(
+            num_steps=checkpoint["num_steps"],
+            num_joints=checkpoint["num_joints"],
+            condition_dim=checkpoint.get("condition_dim", 6),
+            hidden_dim=checkpoint.get("hidden_dim", 512),
+            time_dim=checkpoint.get("time_dim", 256),
+            num_blocks=checkpoint.get("num_blocks", 4),
+            dropout_rate=checkpoint['dropout']
+        ).to(device)
+    else:
+        model = ConditionalDiffusionModel(
+            num_steps=checkpoint["num_steps"],
+            num_joints=checkpoint["num_joints"],
+            condition_dim=checkpoint.get("condition_dim", 6),
+            hidden_dim=checkpoint.get("hidden_dim", 512),
+            time_dim=checkpoint.get("time_dim", 256),
+            num_blocks=checkpoint.get("num_blocks", 4),
+        ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 

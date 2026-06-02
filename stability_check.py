@@ -8,7 +8,7 @@ import sys
 import torch
 import argparse
 import importlib.util
-
+from ink_kin_stance.kinematics import QuadrupedKinematics
 
 # =============================================================================
 # Load training modules for model inference
@@ -56,144 +56,6 @@ NUM_TRAJ_STEPS = 20
 STEP_HEIGHT = 0.05
 LEG_IS_RIGHT = {0: False, 1: True, 2: False, 3: True}
 MIRROR_LEG = {0: 1, 1: 0, 2: 3, 3: 2}  # FL<->FR, RL<->RR
-
-
-# =============================================================================
-# Combined kinematics
-# =============================================================================
-
-class WalkKinematics:
-    """Combined body-shift + leg-step kinematics using Pinocchio."""
-
-    def __init__(self, model, foot_frame_names, body_frame_name="trunk"):
-        self.model = model
-        self.data = model.createData()
-        self.foot_frame_names = foot_frame_names
-        self.foot_frame_ids = [model.getFrameId(name) for name in foot_frame_names]
-        self.body_frame_id = model.getFrameId(body_frame_name)
-        self.has_floating_base = (
-            model.njoints > 1
-            and model.joints[1].shortname() == "JointModelFreeFlyer"
-        )
-        self.feet_world_positions = None
-
-    def init_stance(self, q_init):
-        pin.forwardKinematics(self.model, self.data, q_init)
-        pin.updateFramePlacements(self.model, self.data)
-        self.feet_world_positions = [
-            self.data.oMf[fid].translation.copy()
-            for fid in self.foot_frame_ids
-        ]
-        return q_init
-
-    def body_to_world(self, pos_body, q):
-        pin.forwardKinematics(self.model, self.data, q)
-        pin.updateFramePlacements(self.model, self.data)
-        oMb = self.data.oMf[self.body_frame_id]
-        return oMb.act(np.array(pos_body))
-
-    def world_to_body(self, pos_world, q):
-        pin.forwardKinematics(self.model, self.data, q)
-        pin.updateFramePlacements(self.model, self.data)
-        oMb = self.data.oMf[self.body_frame_id]
-        return oMb.actInv(np.array(pos_world))
-
-    def get_foot_position_body(self, leg_idx, q):
-        pin.forwardKinematics(self.model, self.data, q)
-        pin.updateFramePlacements(self.model, self.data)
-        pos_world = self.data.oMf[self.foot_frame_ids[leg_idx]].translation
-        return self.world_to_body(pos_world, q)
-
-    def set_body_pose(self, q, body_translation, body_rotation=None):
-        q = q.copy()
-        if self.has_floating_base:
-            q[0:3] = body_translation
-            if body_rotation is not None:
-                quat = pin.Quaternion(body_rotation)
-                q[3:7] = np.array([quat.x, quat.y, quat.z, quat.w])
-        return q
-
-    def compute_leg_ik(self, leg_idx, target_pos_world, q_current,
-                       eps=1e-4, max_iter=100, dt=0.1):
-        frame_id = self.foot_frame_ids[leg_idx]
-        q = q_current.copy()
-        v_base = 6 if self.has_floating_base else 0
-        leg_v_start = v_base + leg_idx * 3
-        leg_v_end = leg_v_start + 3
-
-        for _ in range(max_iter):
-            pin.forwardKinematics(self.model, self.data, q)
-            pin.updateFramePlacements(self.model, self.data)
-            err = np.array(target_pos_world) - self.data.oMf[frame_id].translation
-            if np.linalg.norm(err) < eps:
-                return q, True, np.linalg.norm(err)
-            J = pin.computeFrameJacobian(
-                self.model, self.data, q, frame_id, pin.LOCAL_WORLD_ALIGNED
-            )[:3, leg_v_start:leg_v_end]
-            damp = 1e-6
-            v = J.T @ np.linalg.solve(J @ J.T + damp * np.eye(3), err)
-            v_full = np.zeros(self.model.nv)
-            v_full[leg_v_start:leg_v_end] = v
-            q = pin.integrate(self.model, q, v_full * dt)
-        return q, False, np.linalg.norm(err)
-
-    def generate_cycloid_waypoints(self, start_pos, target_pos, step_height, num_points):
-        start_pos = np.array(start_pos)
-        target_pos = np.array(target_pos)
-        waypoints = []
-        for i in range(num_points):
-            phase = i / (num_points - 1) if num_points > 1 else 1.0
-            theta = phase * 2 * np.pi
-            cycloid_x = (theta - np.sin(theta)) / (2 * np.pi)
-            cycloid_z = (1 - np.cos(theta)) / 2
-            pos = start_pos + (target_pos - start_pos) * cycloid_x
-            pos[2] += step_height * cycloid_z
-            waypoints.append(pos.copy())
-        return waypoints
-
-    def get_joint_angles(self, q, leg_idx=None):
-        """Extract joint angles from pinocchio q. Returns 12 angles or 3 for one leg."""
-        if self.has_floating_base:
-            q_joints = q[7:]
-        else:
-            q_joints = q
-        angles = []
-        i = 0
-        while i < len(q_joints):
-            angles.append(q_joints[i])
-            if i + 3 < len(q_joints):
-                thigh_sin = q_joints[i + 1]
-                thigh_cos = q_joints[i + 2]
-                angles.append(np.arctan2(thigh_sin, thigh_cos))
-                angles.append(q_joints[i + 3])
-                i += 4
-            else:
-                break
-        angles = np.array(angles)
-        if leg_idx is not None:
-            return angles[leg_idx * 3: leg_idx * 3 + 3]
-        return angles
-
-    def set_joint_angles(self, q, angles_12):
-        """Set all 12 joint angles in pinocchio q."""
-        q = q.copy()
-        for leg in range(4):
-            base_idx = 7 + leg * 4
-            joint_idx = leg * 3
-            q[base_idx + 0] = angles_12[joint_idx]
-            q[base_idx + 1] = np.sin(angles_12[joint_idx + 1])
-            q[base_idx + 2] = np.cos(angles_12[joint_idx + 1])
-            q[base_idx + 3] = angles_12[joint_idx + 2]
-        return q
-
-    def update_feet_positions(self, q):
-        """Update stored feet world positions from current q."""
-        pin.forwardKinematics(self.model, self.data, q)
-        pin.updateFramePlacements(self.model, self.data)
-        self.feet_world_positions = [
-            self.data.oMf[fid].translation.copy()
-            for fid in self.foot_frame_ids
-        ]
 
 
 # =============================================================================
@@ -313,7 +175,7 @@ for leg in range(4):
     q_init[base_idx + 2] = np.cos(THIGH_ANGLE)
     q_init[base_idx + 3] = CALF_ANGLE
 
-kin = WalkKinematics(pin_model, FOOT_FRAMES, body_frame_name="trunk")
+kin = QuadrupedKinematics(pin_model, FOOT_FRAMES, body_frame_name="trunk")
 q_neutral = kin.init_stance(q_init)
 
 

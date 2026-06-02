@@ -4,6 +4,7 @@ from still.diffusion_train import load_model, generate_trajectory
 import numpy as np
 import time
 import random
+from ink_kin_stance.kinematics import QuadrupedKinematics, rotation_rpy
 
 class StillDiffusionHelper:
     def __init__(self, model_path, device=None):
@@ -100,8 +101,7 @@ def start_with_pin(checkpoint):
     ROLL_RANGE, PITCH_RANGE, YAW_RANGE = 0.0, 0.0, 0.0
     num_steps = checkpoint["num_steps"]
 
-    from still.eval_diffusion import QuadrupedStance, rotation_rpy
-    stance = QuadrupedStance(model, FOOT_FRAMES)
+    stance = QuadrupedKinematics(model, FOOT_FRAMES)
 
     q_init = pin.neutral(model)
     q_init[2] = BODY_HEIGHT

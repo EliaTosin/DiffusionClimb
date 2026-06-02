@@ -8,7 +8,8 @@ import torch
 import matplotlib.pyplot as plt
 
 # Import diffusion model utilities
-from still.diffusion_train import load_model, generate_trajectory, GaussianDiffusion
+from still.diffusion_train import load_model, generate_trajectory
+from ink_kin_stance.kinematics import rotation_rpy, QuadrupedKinematics
 
 URDF_PATH = "../aliengo.urdf"
 MESH_DIR = os.path.dirname(os.path.abspath(URDF_PATH))
@@ -26,102 +27,9 @@ except Exception as e:
     collision_model = pin.GeometryModel()
     visual_model = pin.GeometryModel()
 
-
-class QuadrupedStance:
-    def __init__(self, model, foot_frame_names):
-        self.model = model
-        self.data = model.createData()
-        self.foot_frame_names = foot_frame_names
-        self.foot_frame_ids = [model.getFrameId(name) for name in foot_frame_names]
-        self.feet_world_positions = None
-        self.has_floating_base = (model.njoints > 1 and model.joints[1].shortname() == "JointModelFreeFlyer")
-
-    def init_stance(self, q_init=None):
-        if q_init is None:
-            q_init = pin.neutral(self.model)
-        pin.forwardKinematics(self.model, self.data, q_init)
-        pin.updateFramePlacements(self.model, self.data)
-        self.feet_world_positions = [
-            self.data.oMf[fid].translation.copy()
-            for fid in self.foot_frame_ids
-        ]
-        return q_init
-
-    def set_body_pose(self, q, body_translation, body_rotation):
-        q = q.copy()
-        if self.has_floating_base:
-            q[0:3] = body_translation
-            quat = pin.Quaternion(body_rotation)
-            q[3:7] = np.array([quat.x, quat.y, quat.z, quat.w])
-        return q
-
-    def compute_leg_ik_pinocchio(self, leg_idx, target_pos_world, q_current, eps=1e-4, max_iter=100, dt=0.1):
-        frame_id = self.foot_frame_ids[leg_idx]
-        q = q_current.copy()
-        v_base = 6 if self.has_floating_base else 0
-        leg_v_start = v_base + leg_idx * 3
-        leg_v_end = leg_v_start + 3
-
-        for _ in range(max_iter):
-            pin.forwardKinematics(self.model, self.data, q)
-            pin.updateFramePlacements(self.model, self.data)
-            err = np.array(target_pos_world) - self.data.oMf[frame_id].translation
-            if np.linalg.norm(err) < eps:
-                return q, True, np.linalg.norm(err)
-            J = pin.computeFrameJacobian(
-                self.model, self.data, q, frame_id, pin.LOCAL_WORLD_ALIGNED
-            )[:3, leg_v_start:leg_v_end]
-            damp = 1e-6
-            v = J.T @ np.linalg.solve(J @ J.T + damp * np.eye(3), err)
-            v_full = np.zeros(self.model.nv)
-            v_full[leg_v_start:leg_v_end] = v
-            q = pin.integrate(self.model, q, v_full * dt)
-        return q, False, np.linalg.norm(err)
-
-    def solve_stance(self, body_translation=None, body_rotation=None, q_init=None):
-        body_translation = np.array(body_translation)
-        if body_rotation is None:
-            body_rotation = np.eye(3)
-        q = self.set_body_pose(q_init, body_translation, body_rotation)
-        for leg_idx in range(len(self.foot_frame_ids)):
-            target_pos = self.feet_world_positions[leg_idx]
-            q, _, _ = self.compute_leg_ik_pinocchio(leg_idx, target_pos, q)
-        return q, True
-
-    def get_joint_angles(self, q):
-        if self.has_floating_base:
-            q_joints = q[7:]
-        else:
-            q_joints = q
-        angles = []
-        i = 0
-        while i < len(q_joints):
-            angles.append(q_joints[i])
-            if i + 3 < len(q_joints):
-                thigh_sin = q_joints[i + 1]
-                thigh_cos = q_joints[i + 2]
-                angles.append(np.arctan2(thigh_sin, thigh_cos))
-                angles.append(q_joints[i + 3])
-                i += 4
-            else:
-                break
-        return np.array(angles)
-
-
-def rotation_rpy(roll, pitch, yaw):
-    cr, sr = np.cos(roll), np.sin(roll)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cy, sy = np.cos(yaw), np.sin(yaw)
-    R = np.array([
-        [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
-        [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
-        [-sp,   cp*sr,            cp*cr]
-    ])
-    return R
-
-
 FOOT_FRAMES = ["FL_foot", "FR_foot", "RL_foot", "RR_foot"]
-stance = QuadrupedStance(model, FOOT_FRAMES)
+stance = QuadrupedKinematics(model, FOOT_FRAMES)
+kin = QuadrupedKinematics(model, FOOT_FRAMES)
 BODY_HEIGHT = 0.42
 
 # Initial configuration
@@ -137,9 +45,10 @@ for leg in range(4):
     q_init[base_idx + 3] = CALF_ANGLE
 
 q_neutral = stance.init_stance(q_init)
+_ = kin.init_stance(q_init)
 
 
-def plot_trajectories(diff_trajectory, ik_trajectory, delta, helper_trajectory=None):
+def plot_trajectories(diff_trajectory, ik_trajectory, delta, helper_trajectory=None, ik_traj_vel=None):
     # Creiamo un asse X normalizzato [0, 1] per far combaciare le lunghezze
     x_diff = np.linspace(0, 1, len(diff_trajectory))
     x_ik = np.linspace(0, 1, len(ik_trajectory))
@@ -154,12 +63,14 @@ def plot_trajectories(diff_trajectory, ik_trajectory, delta, helper_trajectory=N
 
     for i in range(12):
         # Plot traiettoria 'diff' (linea continua)
-        axes[i].plot(x_diff, diff_trajectory[:, i], label="diff", color='royalblue', linewidth=2)
+        axes[i].plot(x_diff, diff_trajectory[:, i], label="diff vel", color='lightblue', linewidth=2)
 
         # Plot traiettoria 'ik' (linea tratteggiata)
-        axes[i].plot(x_ik, ik_trajectory[:, i], label="ik", color='green', linestyle='--', linewidth=2)
+        axes[i].plot(x_ik, ik_trajectory[:, i], label="ik classica", color='green', linestyle='--', linewidth=2)
         if helper_trajectory is not None:
-            axes[i].plot(x_helper, helper_trajectory[:, i], label="helper", color='darkorange', linestyle='--', linewidth=3)
+            axes[i].plot(x_helper, helper_trajectory[:, i], label="diff classico", color='lightgreen', linewidth=2)
+        if ik_traj_vel is not None:
+            axes[i].plot(x_ik, ik_traj_vel[:, i], label="ik vel", color='blue', linestyle='--', linewidth=2)
 
         # Personalizzazione del singolo subplot
         axes[i].set_title(f'Confronto Giunto {i}', fontsize=12)
@@ -203,6 +114,7 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
     X_RANGE, Y_RANGE, Z_RANGE = 0.10, 0.05, 0.1
     # ROLL_RANGE, PITCH_RANGE, YAW_RANGE = 0.25, 0.25, 0.3
     ROLL_RANGE, PITCH_RANGE, YAW_RANGE = 0.0, 0.0, 0.0
+    random.seed(42)  # setting the same goals at every run
 
     # Setup visualization
     viz = None
@@ -232,6 +144,7 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
             fp[2] += random.uniform(-0.04, 0.04)
             perturbed_feet.append(fp)
         stance.feet_world_positions = perturbed_feet
+        kin.feet_world_positions = perturbed_feet
 
         # Update foot markers in visualizer
         if viz is not None:
@@ -242,7 +155,6 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
                 )
                 viz.viewer[f"foot_target_{i}"].set_transform(tf.translation_matrix(fp))
 
-        random.seed(42) #setting the same goals at every run
         # Random start position + RPY
         start_pos = np.array([
             random.uniform(-X_RANGE, X_RANGE),
@@ -317,15 +229,41 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
         ik_trajectory = np.array(ik_trajectory)
         t_ik = time.perf_counter() - t_ik_start
 
+
+        ### VEL
+        ik_traj_vel = []
+        NUM_TRAJ_STEPS = num_steps
+        q_current = q_start.copy()
+        body_positions, body_velocities = kin.compute_spline_target_cmd(start_pos, goal_pos, NUM_TRAJ_STEPS)
+        for step in range(NUM_TRAJ_STEPS):
+            alpha = step / (NUM_TRAJ_STEPS - 1)
+            # current_pos = start_pos + alpha * (goal_pos - start_pos)
+            current_pos = body_positions[step]
+            current_vel = body_velocities[step]
+            current_rpy = start_rpy + alpha * (goal_rpy - start_rpy)
+            R = rotation_rpy(*current_rpy)
+
+            # q_new, ok = kin.solve_stance(
+            #     body_translation=current_pos, body_rotation=R, q_init=q_current,
+            # )
+            q_new, _ = kin.solve_stance_vel(
+                body_translation=current_pos, body_rotation=R, q_init=q_current, body_vel=current_vel,
+            )
+
+            q_current = q_new
+            angles = kin.get_joint_angles(q_new)
+            ik_traj_vel.append(angles)
+        ik_traj_vel = np.array(ik_traj_vel)
+
         from still.still_diff_utils import StillDiffusionHelper
-        helper = StillDiffusionHelper(model_path, device)
+        helper = StillDiffusionHelper("diffusion_model.pt", device)
         helper_traj = helper.generate_trajectory_multienv(
             delta=torch.tensor(delta, dtype=torch.float, device=device).unsqueeze(dim=0),
             current_joints=torch.tensor(current_joints, dtype=torch.float, device=device).unsqueeze(dim=0),
             ddim_steps=ddim_steps
         )
 
-        plot_trajectories(ik_trajectory=ik_trajectory, diff_trajectory=diff_trajectory, delta=delta, helper_trajectory=helper_traj[0, :, :].cpu().numpy())
+        plot_trajectories(ik_trajectory=ik_trajectory, diff_trajectory=diff_trajectory, delta=delta, helper_trajectory=helper_traj[0, :, :].cpu().numpy(), ik_traj_vel=ik_traj_vel)
 
         # Compute errors
         errors = np.abs(diff_trajectory - ik_trajectory)
@@ -375,8 +313,8 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
 if __name__ == "__main__":
 
     evaluate_diffusion(
-        model_path="diffusion_model.pt",
-        num_tests=10,
+        model_path="diff_model_vel_2hid_cond.pt",
+        num_tests=1,
         device="cuda",
         # ddim_steps=20
     )

@@ -117,3 +117,41 @@ class GaussianDiffusion:
                 x = x + sigma * torch.randn_like(x)
 
         return x
+
+
+class DeterministicGaussianDiffusion(GaussianDiffusion):
+    def __init__(self, num_timesteps=1000, beta_start=1e-4, beta_end=0.02, device="cuda"):
+        super().__init__(num_timesteps, beta_start, beta_end, device)
+        self.gen = torch.Generator(device=device)
+        self.gen.manual_seed(42)
+
+    # ------------------------------------------------------------------
+    # Reverse process
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def p_sample(self, model, x_t, t, condition):
+        """Reverse diffusion: sample x_{t-1} from x_t."""
+        betas_t = extract(self.betas, t, x_t.shape)
+        sqrt_omac_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        sqrt_recip_t = extract(self.sqrt_recip_alphas, t, x_t.shape)
+
+        predicted_noise = model(x_t, t, condition)
+        model_mean = sqrt_recip_t * (x_t - betas_t * predicted_noise / sqrt_omac_t)
+
+        if t[0] == 0:
+            return model_mean
+        posterior_var_t = extract(self.posterior_variance, t, x_t.shape)
+        noise = torch.randn(x_t.shape, dtype=x_t.dtype, device=x_t.device, generator=self.gen)
+
+        return model_mean + torch.sqrt(posterior_var_t) * noise
+
+    @torch.no_grad()
+    def sample(self, model, condition, shape):
+        """Generate samples from noise (full DDPM, all timesteps)."""
+        device = condition.device
+        x = torch.randn(shape, device=device, generator=self.gen)
+        for t in reversed(range(self.num_timesteps)):
+            t_batch = torch.full((shape[0],), t, device=device, dtype=torch.long)
+            x = self.p_sample(model, x, t_batch, condition)
+        return x
