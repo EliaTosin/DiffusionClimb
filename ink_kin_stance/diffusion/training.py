@@ -1,40 +1,31 @@
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn  # <-- AGGIUNTO
 
-from .model import ConditionalDiffusionModel
+from .model import ConditionalDiffusionModel, ConditionalDropOutDiffusionModel
 from .gaussian_diffusion import GaussianDiffusion
 from .dataset import load_and_split_data
 
 
 def train(
-    zarr_path="trajectory_log.zarr",
-    num_epochs=150,
-    batch_size=1024,
-    lr=1e-4,
-    num_timesteps=500,
-    device="cuda",
-    save_path="diffusion_model.pt",
-    train_ratio=0.8,
-    val_ratio=0.1,
-    log_dir="runs/diffusion",
-    hidden_dim=512,
-    time_dim=256,
-    num_blocks=6,
-    eta_min_factor=10,
-    trial=None,
+        zarr_path="trajectory_log.zarr",
+        num_epochs=150,
+        batch_size=1024,
+        lr=1e-4,
+        num_timesteps=500,
+        device="cuda",
+        save_path="diffusion_model.pt",
+        train_ratio=0.8,
+        val_ratio=0.1,
+        log_dir="runs/diffusion",
+        hidden_dim=512,
+        time_dim=256,
+        num_blocks=6,
+        eta_min_factor=10,
+        dropout_rate=0.1,
+        trial=None,
 ):
-    """Train a conditional diffusion model on a trajectory dataset.
-
-    Works for both still (12-joint, 6D delta) and step (3-joint, 3D delta)
-    datasets — dimensions are inferred from the zarr data.
-
-    Args:
-        eta_min_factor: CosineAnnealingLR eta_min = lr / eta_min_factor.
-        trial: Optional Optuna trial for pruning.
-
-    Returns (model, diffusion, train_dataset, best_val_loss).
-    """
     print(f"Training on device: {device}")
 
     writer = SummaryWriter(log_dir=log_dir)
@@ -59,14 +50,29 @@ def train(
 
     delta_dim = train_dataset.delta.shape[1]
     condition_dim = delta_dim + num_joints
-    model = ConditionalDiffusionModel(
-        num_steps=num_steps,
-        num_joints=num_joints,
-        condition_dim=condition_dim,
-        hidden_dim=hidden_dim,
-        time_dim=time_dim,
-        num_blocks=num_blocks,
-    ).to(device)
+
+    if dropout_rate > 0:
+        model = ConditionalDropOutDiffusionModel(
+            num_steps=num_steps,
+            num_joints=num_joints,
+            condition_dim=condition_dim,
+            hidden_dim=hidden_dim,
+            time_dim=time_dim,
+            num_blocks=num_blocks,
+            dropout_rate=dropout_rate
+        ).to(device)
+    else:
+        model = ConditionalDiffusionModel(
+            num_steps=num_steps,
+            num_joints=num_joints,
+            condition_dim=condition_dim,
+            hidden_dim=hidden_dim,
+            time_dim=time_dim,
+            num_blocks=num_blocks,
+        ).to(device)
+
+    ema_avg_fn = get_ema_multi_avg_fn(decay=0.999)
+    ema_model = AveragedModel(model, multi_avg_fn=ema_avg_fn)
 
     diffusion = GaussianDiffusion(num_timesteps=num_timesteps, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -103,6 +109,8 @@ def train(
             scaler.step(optimizer)
             scaler.update()
 
+            ema_model.update_parameters(model)
+
             total_loss += loss.item()
             num_batches += 1
 
@@ -119,6 +127,7 @@ def train(
 
         # Validation
         model.eval()
+        ema_model.eval()
         val_loss = 0
         val_batches = 0
         with torch.no_grad(), torch.amp.autocast("cuda"):
@@ -130,7 +139,7 @@ def train(
                 condition = torch.cat([delta, current_joints], dim=-1)
                 t = torch.randint(0, num_timesteps, (trajectory.shape[0],), device=device)
 
-                loss = diffusion.p_losses(model, trajectory, t, condition)
+                loss = diffusion.p_losses(ema_model, trajectory, t, condition)
                 val_loss += loss.item()
                 val_batches += 1
 
@@ -148,7 +157,7 @@ def train(
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save({
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": ema_model.module.state_dict(),
                 "traj_mean": train_dataset.traj_mean,
                 "traj_std": train_dataset.traj_std,
                 "delta_mean": train_dataset.delta_mean,
@@ -172,7 +181,7 @@ def train(
             )
 
     # Test evaluation
-    model.eval()
+    ema_model.eval()
     test_loss = 0
     test_batches = 0
     with torch.no_grad(), torch.amp.autocast("cuda"):
@@ -184,7 +193,7 @@ def train(
             condition = torch.cat([delta, current_joints], dim=-1)
             t = torch.randint(0, num_timesteps, (trajectory.shape[0],), device=device)
 
-            loss = diffusion.p_losses(model, trajectory, t, condition)
+            loss = diffusion.p_losses(ema_model, trajectory, t, condition)
             test_loss += loss.item()
             test_batches += 1
 
@@ -195,4 +204,4 @@ def train(
 
     writer.close()
 
-    return model, diffusion, train_dataset, best_val_loss
+    return ema_model.module, diffusion, train_dataset, best_val_loss

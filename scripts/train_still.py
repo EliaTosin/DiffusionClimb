@@ -14,6 +14,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-timesteps", type=int, default=500)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--log-dir", default="still/runs/diffusion")
     parser.add_argument("--hidden-dim", type=int, default=512)
     parser.add_argument("--time-dim", type=int, default=256)
@@ -32,6 +33,7 @@ def main():
         hidden_dim=args.hidden_dim,
         time_dim=args.time_dim,
         num_blocks=args.num_blocks,
+        dropout_rate=args.dropout,
         eta_min_factor=10,
     )
 

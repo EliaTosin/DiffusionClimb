@@ -72,3 +72,35 @@ class ConditionalDiffusionModel(nn.Module):
 
         out = self.output_proj(h)
         return out.view(batch_size, self.num_steps, self.num_joints)
+
+
+class ConditionalDropOutDiffusionModel(ConditionalDiffusionModel):
+    """
+    Conditional Diffusion Model with:
+    - Dropout
+    - Doubled condition output layer
+    """
+    def __init__(self, num_steps=20, num_joints=12, condition_dim=6, hidden_dim=512, time_dim=256, num_blocks=4, dropout_rate=0.0):
+        super().__init__(num_steps, num_joints, condition_dim, hidden_dim, time_dim, num_blocks)
+
+        self.blocks = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_dim * 4, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.GELU(),
+                nn.Dropout(p=dropout_rate),
+
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
+                nn.GELU(),
+                nn.Dropout(p=dropout_rate),
+            )
+            for _ in range(num_blocks)
+        ])
+
+        self.condition_mlp = nn.Sequential(
+            nn.Linear(condition_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim * 2),
+        )
+
