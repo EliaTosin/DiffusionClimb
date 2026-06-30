@@ -8,8 +8,9 @@ import torch
 import matplotlib.pyplot as plt
 
 # Import diffusion model utilities
-from still.diffusion_train import load_model, generate_trajectory
+from still.diffusion_train import load_model, generate_trajectory, generate_trajectory_retroaction
 from ink_kin_stance.kinematics import rotation_rpy, QuadrupedKinematics
+from still.still_diff_utils import StillDiffusionHelper
 
 URDF_PATH = "../aliengo.urdf"
 MESH_DIR = os.path.dirname(os.path.abspath(URDF_PATH))
@@ -68,7 +69,7 @@ def plot_trajectories(diff_trajectory, ik_trajectory, delta, helper_trajectory=N
         # Plot traiettoria 'ik' (linea tratteggiata)
         axes[i].plot(x_ik, ik_trajectory[:, i], label="ik classica", color='green', linestyle='--', linewidth=2)
         if helper_trajectory is not None:
-            axes[i].plot(x_helper, helper_trajectory[:, i], label="diff classico", color='lightgreen', linewidth=2)
+            axes[i].plot(x_helper, helper_trajectory[:, i], label="diff classico", color='orange', linewidth=2)
         if ik_traj_vel is not None:
             axes[i].plot(x_ik, ik_traj_vel[:, i], label="ik vel", color='blue', linestyle='--', linewidth=2)
 
@@ -188,7 +189,11 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
         )
         current_joints = stance.get_joint_angles(q_start)
 
-        print(f"\n{'='*60}")
+        # Padding for t=0
+        prev_joints = current_joints.copy()
+        prev_actions = current_joints.copy()
+
+        print(f"\n{'=' * 60}")
         print(f"Test {test_idx + 1}/{num_tests}")
         print(f"Start pos: {start_pos}, rpy: {np.rad2deg(start_rpy).round(1)} deg")
         print(f"Goal  pos: {goal_pos}, rpy: {np.rad2deg(goal_rpy).round(1)} deg")
@@ -198,9 +203,14 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
 
         # Generate trajectory with diffusion model
         t_start = time.perf_counter()
-        diff_trajectory = generate_trajectory(
+        # diff_trajectory = generate_trajectory(
+        #     diff_model, diffusion, checkpoint,
+        #     delta, current_joints, device=device, ddim_steps=ddim_steps
+        # )
+        diff_trajectory = generate_trajectory_retroaction(
             diff_model, diffusion, checkpoint,
-            delta, current_joints, device=device, ddim_steps=ddim_steps
+            delta, current_joints, prev_joints, prev_actions,
+            device=device, ddim_steps=ddim_steps
         )
         t_diff = time.perf_counter() - t_start
 
@@ -255,7 +265,6 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
             ik_traj_vel.append(angles)
         ik_traj_vel = np.array(ik_traj_vel)
 
-        from still.still_diff_utils import StillDiffusionHelper
         helper = StillDiffusionHelper("diffusion_model.pt", device)
         helper_traj = helper.generate_trajectory_multienv(
             delta=torch.tensor(delta, dtype=torch.float, device=device).unsqueeze(dim=0),
@@ -280,7 +289,7 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
         print(f"  Mean Absolute Error: {mean_error:.6f} rad ({np.rad2deg(mean_error):.4f} deg)")
         print(f"  Max Absolute Error:  {max_error:.6f} rad ({np.rad2deg(max_error):.4f} deg)")
         print(f"  Per-joint MAE: {np.round(per_joint_error, 4)}")
-        print(f"  Diffusion time: {t_diff*1000:.2f} ms | IK time: {t_ik*1000:.2f} ms | Speedup: {t_ik/t_diff:.1f}x")
+        print(f"  Diffusion time: {t_diff * 1000:.2f} ms | IK time: {t_ik * 1000:.2f} ms | Speedup: {t_ik / t_diff:.1f}x")
 
         # Visualize: body moves with feet fixed on ground
         if viz is not None:
@@ -294,18 +303,18 @@ def evaluate_diffusion(model_path="diffusion_model.pt", num_tests=10, device="cu
     stance.feet_world_positions = feet_neutral
 
     # Summary statistics
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Total tests: {num_tests}")
     print(f"Mean MAE: {np.mean(all_errors):.6f} rad ({np.rad2deg(np.mean(all_errors)):.4f} deg)")
     print(f"Std MAE:  {np.std(all_errors):.6f} rad ({np.rad2deg(np.std(all_errors)):.4f} deg)")
     print(f"Mean Max Error: {np.mean(all_max_errors):.6f} rad ({np.rad2deg(np.mean(all_max_errors)):.4f} deg)")
     print(f"Worst Max Error: {np.max(all_max_errors):.6f} rad ({np.rad2deg(np.max(all_max_errors)):.4f} deg)")
     print(f"\nTiming:")
-    print(f"  Diffusion: {np.mean(all_diff_times)*1000:.2f} ms (std: {np.std(all_diff_times)*1000:.2f} ms)")
-    print(f"  IK:        {np.mean(all_ik_times)*1000:.2f} ms (std: {np.std(all_ik_times)*1000:.2f} ms)")
-    print(f"  Avg speedup: {np.mean(all_ik_times)/np.mean(all_diff_times):.1f}x")
+    print(f"  Diffusion: {np.mean(all_diff_times) * 1000:.2f} ms (std: {np.std(all_diff_times) * 1000:.2f} ms)")
+    print(f"  IK:        {np.mean(all_ik_times) * 1000:.2f} ms (std: {np.std(all_ik_times) * 1000:.2f} ms)")
+    print(f"  Avg speedup: {np.mean(all_ik_times) / np.mean(all_diff_times):.1f}x")
 
     return all_errors, all_max_errors, all_diff_times, all_ik_times
 

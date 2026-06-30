@@ -33,6 +33,8 @@ def main():
         time_dim=args.time_dim,
         num_blocks=args.num_blocks,
         eta_min_factor=100,
+        retroaction=True,
+        dropout_rate=0.1,
     )
 
 

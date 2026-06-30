@@ -8,7 +8,7 @@ import torch
 import matplotlib.pyplot as plt
 
 # Import diffusion model utilities
-from diffusion_train import load_model, generate_trajectory, GaussianDiffusion
+from step_diff_utils import load_model, generate_trajectory
 
 URDF_PATH = "../aliengo.urdf"
 MESH_DIR = os.path.dirname(os.path.abspath(URDF_PATH))

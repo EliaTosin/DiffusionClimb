@@ -36,11 +36,11 @@ def init_worker():
     _worker_feet_neutral = [fp.copy() for fp in kin.feet_world_positions]
 
 
-def generate_trajectory(seed):
+def generate_trajectory(seed, use_spline=False):
     random.seed(seed)
     np.random.seed(seed)
 
-    kin = _worker_kin
+    kin : QuadrupedKinematics = _worker_kin
     q_current = _worker_q_neutral.copy()
 
     # Perturb foot positions
@@ -97,27 +97,44 @@ def generate_trajectory(seed):
         return None
 
     trajectory_joints = []
-    body_positions, body_velocities = kin.compute_spline_target_cmd(start_pos, goal_pos, NUM_TRAJ_STEPS)
-    for step in range(NUM_TRAJ_STEPS):
-        alpha = step / (NUM_TRAJ_STEPS - 1)
-        # current_pos = start_pos + alpha * (goal_pos - start_pos)
-        current_pos = body_positions[step]
-        current_vel = body_velocities[step]
-        current_rpy = start_rpy + alpha * (goal_rpy - start_rpy)
-        R = rotation_rpy(*current_rpy)
+    if use_spline:
+        body_positions, body_velocities = kin.compute_spline_target_cmd(start_pos, goal_pos, NUM_TRAJ_STEPS)
+        for step in range(NUM_TRAJ_STEPS):
+            alpha = step / (NUM_TRAJ_STEPS - 1)
+            # current_pos = start_pos + alpha * (goal_pos - start_pos)
+            current_pos = body_positions[step]
+            current_vel = body_velocities[step]
+            current_rpy = start_rpy + alpha * (goal_rpy - start_rpy)
+            R = rotation_rpy(*current_rpy)
 
-        # q_new, ok = kin.solve_stance(
-        #     body_translation=current_pos, body_rotation=R, q_init=q_current,
-        # )
-        q_new, _ = kin.solve_stance_vel(
-            body_translation=current_pos, body_rotation=R, q_init=q_current, body_vel=current_vel,
-        )
+            # q_new, ok = kin.solve_stance(
+            #     body_translation=current_pos, body_rotation=R, q_init=q_current,
+            # )
+            q_new, _ = kin.solve_stance_vel(
+                body_translation=current_pos, body_rotation=R, q_init=q_current, body_vel=current_vel,
+            )
 
-        q_current = q_new
-        angles = kin.get_joint_angles(q_new)
-        if not check_joint_limits(angles):
-            return None
-        trajectory_joints.append(angles.tolist())
+            q_current = q_new
+            angles = kin.get_joint_angles(q_new)
+            if not check_joint_limits(angles):
+                return None
+            trajectory_joints.append(angles.tolist())
+    else:
+        for step in range(NUM_TRAJ_STEPS):
+            alpha = step / (NUM_TRAJ_STEPS - 1)
+            current_pos = start_pos + alpha * (goal_pos - start_pos)
+            current_rpy = start_rpy + alpha * (goal_rpy - start_rpy)
+            R = rotation_rpy(*current_rpy)
+
+            q_new, ok = kin.solve_stance(
+                body_translation=current_pos, body_rotation=R, q_init=q_current,
+            )
+
+            q_current = q_new
+            angles = kin.get_joint_angles(q_new)
+            if not check_joint_limits(angles):
+                return None
+            trajectory_joints.append(angles.tolist())
 
     return (start_pos.tolist(), goal_pos.tolist(),
             start_rpy.tolist(), goal_rpy.tolist(), trajectory_joints)
@@ -129,7 +146,7 @@ def main():
 
     print(f"Generating {num_trajectories} trajectories using {num_workers} workers...")
 
-    root = zarr.open_group("still/trajectory_log_vel.zarr", mode="w")
+    root = zarr.open_group("still/trajectory_log.zarr", mode="w")
     start_positions = root.zeros("start_positions", shape=(num_trajectories, 3), dtype=np.float32)
     goal_positions = root.zeros("goal_positions", shape=(num_trajectories, 3), dtype=np.float32)
     start_rpys = root.zeros("start_rpys", shape=(num_trajectories, 3), dtype=np.float32)

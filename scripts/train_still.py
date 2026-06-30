@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--log-dir", default="still/runs/diffusion")
     parser.add_argument("--hidden-dim", type=int, default=512)
     parser.add_argument("--time-dim", type=int, default=256)
+    parser.add_argument("--retroaction", type=bool, default=False)
     parser.add_argument("--num-blocks", type=int, default=6)
     args = parser.parse_args()
 
@@ -34,6 +35,7 @@ def main():
         time_dim=args.time_dim,
         num_blocks=args.num_blocks,
         dropout_rate=args.dropout,
+        retroaction=args.retroaction,
         eta_min_factor=10,
     )
 

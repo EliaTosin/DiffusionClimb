@@ -411,6 +411,47 @@ def generate_trajectory(model, diffusion, checkpoint, delta, current_joints, dev
     return trajectory
 
 
+def generate_trajectory_retroaction(model, diffusion, checkpoint, delta, current_joints, prev_joints, prev_actions, device="cpu", ddim_steps=0):
+    """
+    Generate a trajectory given delta (pos + rpy) and current joint values.
+
+    delta: (6,) array - [dx, dy, dz, droll, dpitch, dyaw]
+    current_joints: (12,) array - current joint angles
+    ddim_steps: number of DDIM denoising steps (default 50, set to 0 for full DDPM)
+
+    Returns: (num_steps, num_joints) trajectory
+    """
+    model.eval()
+
+    # Normalize inputs
+    delta_mean = checkpoint["delta_mean"]
+    delta_std = checkpoint["delta_std"]
+    traj_mean = checkpoint["traj_mean"]
+    traj_std = checkpoint["traj_std"]
+
+    delta_norm = (np.array(delta) - delta_mean) / delta_std
+    current_joints_norm = (np.array(current_joints) - traj_mean) / traj_std
+    q_prev_norm = (np.array(prev_joints) - traj_mean) / traj_std
+    a_prev_norm = (np.array(prev_actions) - traj_mean) / traj_std
+
+    condition = torch.tensor(
+        np.concatenate([delta_norm, current_joints_norm, q_prev_norm, a_prev_norm]), dtype=torch.float32
+    ).unsqueeze(0).to(device)
+
+    # Sample trajectory
+    shape = (1, checkpoint["num_steps"], checkpoint["num_joints"])
+    if ddim_steps > 0:
+        traj_retroaction = diffusion.ddim_sample(model, condition, shape, ddim_steps=ddim_steps)
+    else:
+        traj_retroaction = diffusion.sample(model, condition, shape)
+
+    # Denormalize
+    traj_retroaction = traj_retroaction.cpu().numpy()[0]
+    traj_retroaction = traj_retroaction * checkpoint["traj_std"] + checkpoint["traj_mean"]
+
+    return traj_retroaction
+
+
 # =============================================================================
 # Main
 # =============================================================================
