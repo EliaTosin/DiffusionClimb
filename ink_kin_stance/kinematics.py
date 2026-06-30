@@ -196,7 +196,7 @@ class QuadrupedKinematics:
     # ------------------------------------------------------------------
 
     def compute_leg_ik(self, leg_idx, target_pos_world, q_current,
-                       eps=1e-4, max_iter=100, dt=0.1):
+                       eps=1e-4, max_iter=100, dt=0.05):
         """Solve IK for a single leg to reach *target_pos_world*.
 
         Returns (q, converged, residual_norm).

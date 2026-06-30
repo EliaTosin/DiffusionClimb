@@ -5,7 +5,7 @@ from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn  # <-- AGG
 
 from .model import ConditionalDiffusionModel, ConditionalDropOutDiffusionModel
 from .gaussian_diffusion import GaussianDiffusion
-from .dataset import load_and_split_data
+from .dataset import load_and_split_data, load_and_split_data_history
 
 
 def train(
@@ -24,6 +24,7 @@ def train(
         num_blocks=6,
         eta_min_factor=10,
         dropout_rate=0.1,
+        retroaction=False,
         trial=None,
 ):
     print(f"Training on device: {device}")
@@ -31,9 +32,14 @@ def train(
     writer = SummaryWriter(log_dir=log_dir)
     print(f"TensorBoard logs: {log_dir}")
 
-    train_dataset, val_dataset, test_dataset, num_steps, num_joints = (
-        load_and_split_data(zarr_path, train_ratio=train_ratio, val_ratio=val_ratio)
-    )
+    if retroaction:
+        train_dataset, val_dataset, test_dataset, num_steps, num_joints = (
+            load_and_split_data_history(zarr_path, train_ratio=train_ratio, val_ratio=val_ratio)
+        )
+    else:
+        train_dataset, val_dataset, test_dataset, num_steps, num_joints = (
+            load_and_split_data(zarr_path, train_ratio=train_ratio, val_ratio=val_ratio)
+        )
 
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True, drop_last=True,
@@ -49,7 +55,10 @@ def train(
     )
 
     delta_dim = train_dataset.delta.shape[1]
-    condition_dim = delta_dim + num_joints
+    if retroaction:
+        condition_dim = delta_dim + (num_joints * 3) # 6 (goal XYZ RPY) - 12 (joint state) - 12 (previous joint state) - 12 (previous action)
+    else:
+        condition_dim = delta_dim + num_joints
 
     if dropout_rate > 0:
         model = ConditionalDropOutDiffusionModel(
@@ -93,7 +102,12 @@ def train(
             current_joints = batch["current_joints"].to(device, non_blocking=True)
             trajectory = batch["trajectory"].to(device, non_blocking=True)
 
-            condition = torch.cat([delta, current_joints], dim=-1)
+            if retroaction:
+                prev_joints = batch["prev_joints"].to(device, non_blocking=True)
+                prev_actions = batch["prev_actions"].to(device, non_blocking=True)
+                condition = torch.cat([delta, current_joints, prev_joints, prev_actions], dim=-1)
+            else:
+                condition = torch.cat([delta, current_joints], dim=-1)
             t = torch.randint(0, num_timesteps, (trajectory.shape[0],), device=device)
 
             optimizer.zero_grad()
@@ -135,8 +149,12 @@ def train(
                 delta = batch["delta"].to(device, non_blocking=True)
                 current_joints = batch["current_joints"].to(device, non_blocking=True)
                 trajectory = batch["trajectory"].to(device, non_blocking=True)
-
-                condition = torch.cat([delta, current_joints], dim=-1)
+                if retroaction:
+                    prev_joints = batch["prev_joints"].to(device, non_blocking=True)
+                    prev_actions = batch["prev_actions"].to(device, non_blocking=True)
+                    condition = torch.cat([delta, current_joints, prev_joints, prev_actions], dim=-1)
+                else:
+                    condition = torch.cat([delta, current_joints], dim=-1)
                 t = torch.randint(0, num_timesteps, (trajectory.shape[0],), device=device)
 
                 loss = diffusion.p_losses(ema_model, trajectory, t, condition)
@@ -162,6 +180,8 @@ def train(
                 "traj_std": train_dataset.traj_std,
                 "delta_mean": train_dataset.delta_mean,
                 "delta_std": train_dataset.delta_std,
+                "dropout": dropout_rate,
+                "retroaction": retroaction,
                 "num_steps": num_steps,
                 "num_joints": num_joints,
                 "num_timesteps": num_timesteps,
@@ -190,7 +210,12 @@ def train(
             current_joints = batch["current_joints"].to(device, non_blocking=True)
             trajectory = batch["trajectory"].to(device, non_blocking=True)
 
-            condition = torch.cat([delta, current_joints], dim=-1)
+            if retroaction:
+                prev_joints = batch["prev_joints"].to(device, non_blocking=True)
+                prev_actions = batch["prev_actions"].to(device, non_blocking=True)
+                condition = torch.cat([delta, current_joints, prev_joints, prev_actions], dim=-1)
+            else:
+                condition = torch.cat([delta, current_joints], dim=-1)
             t = torch.randint(0, num_timesteps, (trajectory.shape[0],), device=device)
 
             loss = diffusion.p_losses(ema_model, trajectory, t, condition)
