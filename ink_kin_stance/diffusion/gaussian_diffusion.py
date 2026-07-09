@@ -15,7 +15,7 @@ def extract(a, t, x_shape):
 
 
 class GaussianDiffusion:
-    def __init__(self, num_timesteps=1000, beta_start=1e-4, beta_end=0.02,
+    def __init__(self, num_timesteps=500, beta_start=1e-4, beta_end=0.02,
                  device="cuda"):
         self.num_timesteps = num_timesteps
         self.device = device
@@ -120,7 +120,7 @@ class GaussianDiffusion:
 
 
 class DeterministicGaussianDiffusion(GaussianDiffusion):
-    def __init__(self, num_timesteps=1000, beta_start=1e-4, beta_end=0.02, device="cuda"):
+    def __init__(self, num_timesteps=500, beta_start=1e-4, beta_end=0.02, device="cuda"):
         super().__init__(num_timesteps, beta_start, beta_end, device)
         self.gen = torch.Generator(device=device)
         self.gen.manual_seed(42)
