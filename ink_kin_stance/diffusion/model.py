@@ -79,8 +79,11 @@ class ConditionalDropOutDiffusionModel(ConditionalDiffusionModel):
     Conditional Diffusion Model with:
     - Dropout
     - Doubled condition output layer
+    ----
+    This default operates with 'step' task, since 3 joints are commanded and the condtion is limited to
+    12 elements (3 goal, 3 joint state, 3 prev_state, 3 prev_action
     """
-    def __init__(self, num_steps=20, num_joints=12, condition_dim=6, hidden_dim=512, time_dim=256, num_blocks=4, dropout_rate=0.0):
+    def __init__(self, num_steps=20, num_joints=3, condition_dim=12, hidden_dim=512, time_dim=256, num_blocks=4, dropout_rate=0.1):
         super().__init__(num_steps, num_joints, condition_dim, hidden_dim, time_dim, num_blocks)
 
         self.blocks = nn.ModuleList([
