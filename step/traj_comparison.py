@@ -311,7 +311,7 @@ def evaluate_trajectories(model, diffusion, test_loader, device="cuda",
     )
 
 if __name__ == "__main__":
-    model_path = "/home/etosin/Documents/diff_stance/step/diffusion_model_NUOVO_STEP.pt"
+    model_path = "/home/etosin/Documents/diff_stance/step/diffusion_model_retroaction_BEST.pt"
     device = "cuda"
 
     print(f"Loading model from {model_path}...")
@@ -342,6 +342,7 @@ if __name__ == "__main__":
         dataset=test_dataset,  # Passiamo il dataset per la denormalizzazione
         has_retroaction=has_retroaction,
     )
+    print(torch.cuda.memory_summary(device=None, abbreviated=False))
 
     print(f"Shape Ground Truth: {gt_trajectories.shape}")
     print(f"Shape Predizioni DDPM: {pred_trajectories_ddpm.shape}")

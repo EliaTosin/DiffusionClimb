@@ -3,104 +3,6 @@ from torch.utils.data import DataLoader
 from still.diffusion_train import load_model
 from ink_kin_stance.diffusion.dataset import load_and_split_data, load_and_split_data_history
 
-#
-# def evaluate_trajectories(model, diffusion, test_loader, device="cuda",
-#                           num_samples=10, dataset=None, has_retroaction=False):
-#     """
-#     Valuta il modello sul dataset di test e ritorna traiettorie e condizioni.
-#
-#     Args:
-#         model: Il modello di diffusione allenato.
-#         diffusion: L'oggetto GaussianDiffusion.
-#         test_loader: DataLoader del test set.
-#         device: Dispositivo su cui eseguire i calcoli.
-#         num_samples: Numero esatto di traiettorie da generare (es. 10).
-#         dataset: (Opzionale) Il dataset, usato per de-normalizzare.
-#
-#     Returns:
-#         gt_trajectories, pred_trajectories, deltas, current_joints, prev_joints, prev_actions
-#     """
-#     model.eval()
-#
-#     # Liste per accumulare i risultati
-#     all_gt = []
-#     all_pred = []
-#     all_deltas = []
-#     all_curr_j = []
-#     all_prev_j = []
-#     all_prev_a = []
-#
-#     collected_samples = 0
-#     print(f"Inizio generazione per {num_samples} traiettorie...")
-#
-#     with torch.no_grad(), torch.amp.autocast("cuda"):
-#         for batch in test_loader:
-#             if collected_samples >= num_samples:
-#                 break
-#
-#             # Calcoliamo quanti elementi prendere da questo batch
-#             batch_size = batch["trajectory"].shape[0]
-#             take_n = min(batch_size, num_samples - collected_samples)
-#
-#             # 1. Estrazione e Slicing immediato (risparmia calcolo durante la diffusione)
-#             delta = batch["delta"][:take_n].to(device, non_blocking=True)
-#             current_joints = batch["current_joints"][:take_n].to(device, non_blocking=True)
-#             gt_trajectory = batch["trajectory"][:take_n].to(device, non_blocking=True)
-#             # 2. Creazione della condizione
-#             condition = torch.cat([delta, current_joints], dim=-1)
-#             if has_retroaction:
-#                 prev_joints = batch["prev_joints"][:take_n].to(device, non_blocking=True)
-#                 prev_actions = batch["prev_actions"][:take_n].to(device, non_blocking=True)
-#                 condition = torch.cat([delta, current_joints, prev_joints, prev_actions], dim=-1)
-#
-#             # 3. Campionamento dal modello
-#             shape = gt_trajectory.shape
-#             pred_trajectory = diffusion.sample(model=model, shape=shape, condition=condition)
-#             pred_trajectory_ddim = diffusion.ddim_sample(model=model, shape=shape, condition=condition, ddim_steps=10)
-#
-#             # 4. De-normalizzazione (se il dataset è fornito)
-#             if dataset is not None and hasattr(dataset, 'traj_mean') and hasattr(dataset, 'traj_std'):
-#                 t_mean = torch.tensor(dataset.traj_mean, device=device)
-#                 t_std = torch.tensor(dataset.traj_std, device=device)
-#                 d_mean = torch.tensor(dataset.delta_mean, device=device)
-#                 d_std = torch.tensor(dataset.delta_std, device=device)
-#
-#                 # De-normalizziamo le traiettorie e gli stati dei giunti (stessa scala)
-#                 gt_trajectory = (gt_trajectory * t_std) + t_mean
-#                 pred_trajectory = (pred_trajectory * t_std) + t_mean
-#                 current_joints = (current_joints * t_std) + t_mean
-#                 if has_retroaction:
-#                     prev_joints = (prev_joints * t_std) + t_mean
-#                     prev_actions = (prev_actions * t_std) + t_mean
-#
-#                 # De-normalizziamo il delta (scala diversa)
-#                 delta = (delta * d_std) + d_mean
-#
-#             # Salvataggio su CPU
-#             all_gt.append(gt_trajectory.cpu())
-#             all_pred.append(pred_trajectory.cpu())
-#             all_deltas.append(delta.cpu())
-#             all_curr_j.append(current_joints.cpu())
-#             if has_retroaction:
-#                 all_prev_j.append(prev_joints.cpu())
-#                 all_prev_a.append(prev_actions.cpu())
-#
-#             collected_samples += take_n
-#             print(f"Generato {collected_samples}/{num_samples} campioni.")
-#
-#     # 5. Concatenazione finale per restituire singoli tensori puliti
-#     if not has_retroaction:
-#         all_prev_j = all_curr_j
-#         all_prev_a = all_curr_j
-#     return (
-#         torch.cat(all_gt, dim=0),
-#         torch.cat(all_pred, dim=0),
-#         torch.cat(all_deltas, dim=0),
-#         torch.cat(all_curr_j, dim=0),
-#         torch.cat(all_prev_j, dim=0),
-#         torch.cat(all_prev_a, dim=0)
-#     )
-
 
 import torch
 import numpy as np
@@ -342,6 +244,8 @@ if __name__ == "__main__":
         dataset=test_dataset,  # Passiamo il dataset per la denormalizzazione
         has_retroaction=has_retroaction,
     )
+
+    print(torch.cuda.memory_summary(device=None, abbreviated=False))
 
     print(f"Shape Ground Truth: {gt_trajectories.shape}")
     print(f"Shape Predizioni DDPM: {pred_trajectories_ddpm.shape}")
