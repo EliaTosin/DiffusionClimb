@@ -2,6 +2,7 @@ step/trajectory_log.csv
 step/runs
 still/trajectory_log.csv
 still/runs
+still/old_models
 usd/
 .idea/
 outputs
@@ -29,3 +30,6 @@ sweep.db
 .idea/
 *.swp
 .DS_Store
+
+# ignore csv to be persisted on repo
+!still/perfomance_test/inference_tradeoff_metrics.csv
