@@ -32,4 +32,4 @@ sweep.db
 .DS_Store
 
 # ignore csv to be persisted on repo
-!still/perfomance_test/inference_tradeoff_metrics.csv
+!still/perfomance_test/*
