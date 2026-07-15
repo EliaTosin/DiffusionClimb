@@ -343,7 +343,7 @@ def load_model(save_path="diffusion_model.pt", device="cpu"):
     checkpoint = torch.load(save_path, map_location=device, weights_only=False)
     if checkpoint.get("dropout", None) is None:
         print("Cannot find 'dropout' key in checkpoint")
-        sys.exit(-1)
+        checkpoint.setdefault("dropout", 0)
 
     if checkpoint['dropout'] > 0.0:
         model = ConditionalDropOutDiffusionModel(

@@ -7,8 +7,8 @@ script to produce the loss_convergence.pdf file (results - training setup) from 
 """
 
 # --- CONFIGURAZIONE NOMI FILE ---
-# Sostituisci questi nomi con i nomi reali dei tuoi file CSV dentro csv_plots/
-FOLDER_PATH = "csv_plots"
+# Sostituisci questi nomi con i nomi reali dei tuoi file CSV dentro csv_plots (attuale)
+FOLDER_PATH = "./"
 FILE_STEP_TRAIN = "step_runs_diffusion_NUOVO_Loss_train.csv"
 FILE_STEP_VAL = "step_runs_diffusion_NUOVO_Loss_val.csv"
 FILE_STILL_TRAIN = "still_runs_diffusion_retroaction_Loss_train.csv"
