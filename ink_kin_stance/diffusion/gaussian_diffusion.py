@@ -155,3 +155,76 @@ class DeterministicGaussianDiffusion(GaussianDiffusion):
             t_batch = torch.full((shape[0],), t, device=device, dtype=torch.long)
             x = self.p_sample(model, x, t_batch, condition)
         return x
+
+
+class WeightedMSEGaussianDiffusion(GaussianDiffusion):
+    def __init__(self, num_timesteps=1000, beta_start=1e-4, beta_end=0.02, device="cuda"):
+        super().__init__(num_timesteps, beta_start, beta_end, device)
+
+    def p_losses(self, model, x_0, t, condition, noise=None):
+        """Training loss: Prevede x_0 usando MSE con Temporal Weighting."""
+        if noise is None:
+            noise = torch.randn_like(x_0)
+
+        # 1. Diffusione forward (aggiungiamo rumore)
+        x_t = self.q_sample(x_0, t, noise)
+
+        # 2. La rete prevede la traiettoria pulita in radianti
+        predicted_x_0 = model(x_t, t, condition)
+
+        # 3. Calcoliamo l'MSE grezzo senza fare la media
+        # Shape: [batch_size, num_steps, num_joints]
+        loss_unreduced = F.mse_loss(predicted_x_0, x_0, reduction='none')
+
+        # 4. TEMPORAL WEIGHTING
+        # Lo step 0 pesa 1.0, l'ultimo step pesa 10.0 (o il valore che preferisci)
+        num_steps = x_0.shape[1]
+        weights = torch.linspace(1.0, 10.0, steps=num_steps, device=self.device)
+        weights = weights.unsqueeze(0).unsqueeze(2)
+
+        # 5. Moltiplichiamo l'errore per il peso
+        loss_weighted = loss_unreduced * weights
+
+        # 6. Facciamo una media rassicurante e stabile su tutto
+        return loss_weighted.mean()
+
+    @torch.no_grad()
+    def p_sample(self, model, x_t, t, condition):
+        """Reverse diffusion (DDPM): sample partendo dalla previsione di x_0."""
+        predicted_x_0 = model(x_t, t, condition)
+
+        alpha_t = extract(self.alphas, t, x_t.shape)
+        alpha_cumprod_t = extract(self.alphas_cumprod, t, x_t.shape)
+        alpha_cumprod_prev_t = extract(self.alphas_cumprod_prev, t, x_t.shape)
+        beta_t = extract(self.betas, t, x_t.shape)
+
+        c1 = beta_t * torch.sqrt(alpha_cumprod_prev_t) / (1.0 - alpha_cumprod_t)
+        c2 = (1.0 - alpha_cumprod_prev_t) * torch.sqrt(alpha_t) / (1.0 - alpha_cumprod_t)
+
+        model_mean = c1 * predicted_x_0 + c2 * x_t
+
+        if t[0] == 0:
+            return model_mean
+
+        posterior_var_t = extract(self.posterior_variance, t, x_t.shape)
+        noise = torch.randn_like(x_t)
+        return model_mean + torch.sqrt(posterior_var_t) * noise
+
+    @torch.no_grad()
+    def ddim_sample_step(self, model, x_t, t, t_prev, condition, eta=0.0):
+        """Reverse diffusion (DDIM): step veloce partendo da x_0."""
+        predicted_x_0 = model(x_t, t, condition)
+
+        alpha_cumprod_t = extract(self.alphas_cumprod, t, x_t.shape)
+        alpha_cumprod_prev_t = extract(self.alphas_cumprod, t_prev, x_t.shape) if t_prev[0] >= 0 else torch.ones_like(alpha_cumprod_t)
+
+        eps_theta = (x_t - torch.sqrt(alpha_cumprod_t) * predicted_x_0) / torch.sqrt(1.0 - alpha_cumprod_t)
+        sigma_t = eta * torch.sqrt((1 - alpha_cumprod_prev_t) / (1 - alpha_cumprod_t) * (1 - alpha_cumprod_t / alpha_cumprod_prev_t))
+        dir_xt = torch.sqrt(1.0 - alpha_cumprod_prev_t - sigma_t ** 2) * eps_theta
+        x_prev = torch.sqrt(alpha_cumprod_prev_t) * predicted_x_0 + dir_xt
+
+        if eta > 0.0:
+            noise = torch.randn_like(x_t)
+            x_prev = x_prev + sigma_t * noise
+
+        return x_prev
