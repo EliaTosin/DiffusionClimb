@@ -7,6 +7,7 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from still.diffusion_train import load_model
 from ink_kin_stance.diffusion.dataset import load_and_split_data, load_and_split_data_history
+from still.still_diff_utils import set_seed
 
 """
 Evaluate all models by performing 1000 samples at 5 DDIM steps, producing a stat file and then ranking 
@@ -115,6 +116,7 @@ def evaluate_trajectories(model, diffusion, test_loader, device="cuda",
 
 
 if __name__ == "__main__":
+    set_seed()
     device = "cuda"
     num_samples_to_test = 1000
     ddim_steps_to_use = 5
@@ -159,8 +161,7 @@ if __name__ == "__main__":
                     has_retroaction = True
                 elif diff_model.condition_mlp[0].in_features == 18:
                     has_retroaction = False
-                else:
-                    print("Detected model with condition shape", diff_model.condition_mlp[0].in_features)
+                print("Detected model with condition shape: ", diff_model.condition_mlp[0].in_features)
 
                 # Caricamento Dataset basato sul flag del modello
                 if has_retroaction:

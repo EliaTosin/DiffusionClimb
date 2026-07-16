@@ -4,6 +4,7 @@ from still.diffusion_train import load_model, generate_trajectory
 import numpy as np
 import time
 import random
+import os
 from ink_kin_stance.kinematics import QuadrupedKinematics, rotation_rpy
 
 class StillDiffusionHelper:
@@ -49,6 +50,19 @@ class StillDiffusionHelper:
         trajectory = trajectory * self.traj_std + self.traj_mean
 
         return trajectory
+
+
+def set_seed(seed=42):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # Se usi multi-GPU
+    # Forziamo PyTorch ad essere completamente deterministico (può rallentare leggermente l'esecuzione)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print(f"Seed impostato globalmente a: {seed}")
 
 
 def run_benchmark(func, n_runs=10):
