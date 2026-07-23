@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from still.diffusion_train import load_model, generate_trajectory, generate_trajectory_retroaction
 from ink_kin_stance.kinematics import rotation_rpy, QuadrupedKinematics
 from still.still_diff_utils import StillDiffusionHelper
+from ink_kin_stance.constants import ARTICULATION_JOINT_ORDER
 
 URDF_PATH = "../aliengo.urdf"
 MESH_DIR = os.path.dirname(os.path.abspath(URDF_PATH))
@@ -49,50 +50,133 @@ q_neutral = stance.init_stance(q_init)
 _ = kin.init_stance(q_init)
 
 
-def plot_trajectories(diff_trajectory, ik_trajectory, delta, helper_trajectory=None, ik_traj_vel=None):
-    # Creiamo un asse X normalizzato [0, 1] per far combaciare le lunghezze
+def clean_joint_name(name):
+    # Rende il nome leggibile per i grafici (es. "FL_hip_joint" -> "FL Hip")
+    return name.replace("_joint", "").replace("_", " ").upper()
+
+
+def plot_trajectories(
+        diff_trajectory,
+        ik_trajectory,
+        delta,
+        helper_trajectory=None,
+        ik_traj_vel=None,
+        label_ik="Ground Truth (IK)",
+        label_diff="Diff Retroaction",
+        label_helper="Diff Retroaction Wloss",
+        label_vel="IK Velocity",
+        in_degrees=True,
+        save_pdf = False,
+):
+    scale = np.degrees(1.0) if in_degrees else 1.0
+    unit_label = "Position (deg)" if in_degrees else "Position (rad)"
+
+    ik_traj = ik_trajectory * scale
+    diff_traj = diff_trajectory * scale
+    if helper_trajectory is not None:
+        helper_traj = helper_trajectory * scale
+    if ik_traj_vel is not None:
+        ik_vel_traj = ik_traj_vel * scale
+
+    plt.rcParams.update({
+        'font.family': 'serif',
+        'font.size': 11,
+        'axes.labelsize': 12,
+        'axes.titlesize': 11,
+        'xtick.labelsize': 10,
+        'ytick.labelsize': 10,
+        'grid.linestyle': ':',
+        'grid.alpha': 0.65
+    })
+
     x_diff = np.linspace(0, 1, len(diff_trajectory))
     x_ik = np.linspace(0, 1, len(ik_trajectory))
     if helper_trajectory is not None:
         x_helper = np.linspace(0, 1, len(helper_trajectory))
 
-    # Creazione della figura con griglia 4x3 (15x12 è una buona dimensione per non schiacciare tutto)
-    fig, axes = plt.subplots(4, 3, figsize=(15, 12), sharex=True)
-
-    # Appiattiamo l'array di assi (da 4x3 a 1D con 12 elementi) per iterare facilmente
+    fig, axes = plt.subplots(6, 2, figsize=(8.5, 12.5), sharex=True, sharey=False)
     axes = axes.flatten()
 
+    lines = []
+    labels = []
+
     for i in range(12):
-        # Plot traiettoria 'diff' (linea continua)
-        axes[i].plot(x_diff, diff_trajectory[:, i], label="diff vel", color='lightblue', linewidth=2)
+        joint_name = clean_joint_name(ARTICULATION_JOINT_ORDER[i])
 
-        # Plot traiettoria 'ik' (linea tratteggiata)
-        axes[i].plot(x_ik, ik_trajectory[:, i], label="ik classica", color='green', linestyle='--', linewidth=2)
-        if helper_trajectory is not None:
-            axes[i].plot(x_helper, helper_trajectory[:, i], label="diff classico", color='orange', linewidth=2)
-        if ik_traj_vel is not None:
-            axes[i].plot(x_ik, ik_traj_vel[:, i], label="ik vel", color='blue', linestyle='--', linewidth=2)
+        # 1. Ground Truth (IK)
+        l_ik, = axes[i].plot(x_ik, ik_traj[:, i], color='#2c3e50', linestyle='-', linewidth=2.3, alpha=0.9)
 
-        # Personalizzazione del singolo subplot
-        axes[i].set_title(f'Confronto Giunto {i}', fontsize=12)
-        axes[i].set_ylabel('Posizione')
-        axes[i].grid(True, linestyle=':', alpha=0.7)
+        # 2. Modello Retroaction
+        l_ret, = axes[i].plot(x_diff, diff_traj[:, i], color='#2980b9', linestyle='--', linewidth=2.0)
 
-        # Mostriamo la legenda solo nel primo grafico per non ingombrare troppo la vista
         if i == 0:
-            axes[i].legend(loc='best')
+            lines.extend([l_ik, l_ret])
+            labels.extend([label_ik, label_diff])
 
-    # Etichetta comune per l'asse X (la applichiamo solo all'ultima riga: indici 9, 10, 11)
-    for i in range(9, 12):
-        axes[i].set_xlabel('Progresso Traiettoria (Normalizzato 0-1)')
+        # 3. Modello Wloss
+        if helper_trajectory is not None:
+            l_wloss, = axes[i].plot(x_helper, helper_traj[:, i], color='#e74c3c', linestyle='-.', linewidth=2.0)
+            if i == 0:
+                lines.append(l_wloss)
+                labels.append(label_helper)
 
-    # Titolo globale con il Delta pos
-    plt.suptitle(f"Delta pos -- X: {delta[0]:.4f}, Y: {delta[1]:.4f}, Z: {delta[2]:.4f}", fontsize=16, fontweight='bold')
+        # --- AGGIUNTA BADGE ERRORE FINALE ---
+        # Calcoliamo l'errore finale all'ultimo passo temporale (index -1)
+        err_wloss = abs(ik_traj[-1, i] - helper_traj[-1, i]) if helper_trajectory is not None else 0
+        err_ret = abs(ik_traj[-1, i] - diff_traj[-1, i])
 
-    # Aggiusta il layout per evitare sovrapposizioni
+        # Testo compatto con lo scostamento finale in gradi
+        err_text = f"e_fin: {err_wloss:.1f}°" if helper_trajectory is not None else f"e_fin: {err_ret:.1f}°"
+
+        # Inseriamo una box discreta in alto a sinistra di ogni grafico (coordinate trasformate dell'asse [0,1])
+        axes[i].text(
+            0.04, 0.86, err_text,
+            transform=axes[i].transAxes,
+            fontsize=9.5, fontweight='bold',
+            color='#c0392b' if helper_trajectory is not None else '#2980b9',
+            bbox=dict(boxstyle='round,pad=0.2', facecolor='#fcfcfc', edgecolor='#e0e0e0', alpha=0.85)
+        )
+
+        axes[i].set_title(joint_name, fontweight='bold', pad=5)
+        axes[i].grid(True)
+
+        if i % 2 == 0:
+            axes[i].set_ylabel(unit_label, fontweight='bold')
+
+    for i in range(10, 12):
+        axes[i].set_xlabel('Normalized Progress', fontweight='bold')
+
+    # Rende in GRASSETTO i tick numerici degli assi X e Y per tutti e due i subplots
+    for ax in axes:
+        for tick in ax.get_xticklabels():
+            tick.set_fontweight('bold')
+        for tick in ax.get_yticklabels():
+            tick.set_fontweight('bold')
+
+    # Titolo spostato leggermente più in alto
+    title_str = (r"$\Delta$ Position target $\rightarrow$ "
+                 f"X: {delta[0]:.3f} m | Y: {delta[1]:.3f} m | Z: {delta[2]:.3f} m")
+    fig.suptitle(title_str, fontsize=12, fontweight='bold', y=0.985)
+
+    # Legenda sotto il titolo
+    fig.legend(
+        lines, labels,
+        loc='upper center',
+        ncol=len(labels),
+        bbox_to_anchor=(0.5, 0.965),
+        frameon=True,
+        facecolor='#fcfcfc',
+        edgecolor='#ccc',
+        fontsize=10.5,
+        prop={'weight': 'bold', 'size': 10.5}
+    )
+
     plt.tight_layout()
-    # tight_layout a volte "mangia" il suptitle, quindi forziamo un po' di margine in alto
-    fig.subplots_adjust(top=0.93)
+    # top=0.93 per adattare la nuova proporzione verticale
+    fig.subplots_adjust(top=0.9, bottom=0.05, hspace=0.35, wspace=0.20)
+
+    if save_pdf:
+        plt.savefig("wloss_vs_retro_plot.pdf", bbox_inches="tight")
 
     plt.show()
 
