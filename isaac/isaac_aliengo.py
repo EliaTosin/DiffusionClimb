@@ -25,6 +25,7 @@ from ink_kin_stance.constants import (
     LEG_MODEL_INDICES, LEG_IS_RIGHT, MIRROR_LEG,
     FOOT_FRAMES, LEG_NAMES,
 )
+from still.diffusion_train import generate_trajectory_retroaction
 
 
 class AlengoDiffusion:
@@ -43,7 +44,7 @@ class AlengoDiffusion:
         usd_path: Optional[str] = None,
         position: Optional[np.ndarray] = None,
         orientation: Optional[np.ndarray] = None,
-        diffusion_model_path: Optional[str] = None,
+        still_model_path: Optional[str] = None,
         step_model_path: Optional[str] = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         debug: bool = False,
@@ -71,15 +72,16 @@ class AlengoDiffusion:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(script_dir)
 
-        if diffusion_model_path is None:
-            diffusion_model_path = os.path.join(project_root, "still", "diffusion_model_compat.pt")
+        if still_model_path is None:
+            still_model_path = os.path.join(project_root, "still", "models", "diff_model_vel_retroaction_Wloss.pt")
         if step_model_path is None:
-            step_model_path = os.path.join(project_root, "step", "diffusion_model_compat.pt")
+            step_model_path = os.path.join(project_root, "step", "models", "diffusion_model_retroaction_BEST.pt")
 
-        self._model, self._diffusion, self._checkpoint = load_model(
-            diffusion_model_path, device=self._device
+        from still.diffusion_train import load_model as load_new_model
+        self._still_model, self._still_diffusion, self._still_checkpoint = load_new_model(
+            still_model_path, device=self._device
         )
-        self._step_model, self._step_diffusion, self._step_checkpoint = load_model(
+        self._step_model, self._step_diffusion, self._step_checkpoint = load_new_model(
             step_model_path, device=self._device
         )
 
@@ -90,7 +92,7 @@ class AlengoDiffusion:
         # Trajectory state
         self._current_trajectory = None
         self._trajectory_step = 0
-        self._num_trajectory_steps = self._checkpoint["num_steps"]
+        self._num_trajectory_steps = self._still_checkpoint["num_steps"]
 
         # Per-leg step trajectory state
         self._step_trajectories = {i: None for i in range(4)}
@@ -119,39 +121,84 @@ class AlengoDiffusion:
     # Trajectory generation
     # =========================================================================
 
-    def generate_trajectory(self, delta_pos: np.ndarray, current_joints: np.ndarray,
-                            ddim_steps: int = 0) -> np.ndarray:
+    # def generate_trajectory(self, delta_pos: np.ndarray, current_joints: np.ndarray,
+    #                         ddim_steps: int = 0) -> np.ndarray:
+    #     """Generate a trunk joint trajectory."""
+    #     delta_mean = np.array(self._still_checkpoint["delta_mean"], dtype=np.float32)
+    #     delta_std = np.array(self._still_checkpoint["delta_std"], dtype=np.float32)
+    #     traj_mean = np.array(self._still_checkpoint["traj_mean"], dtype=np.float32)
+    #     traj_std = np.array(self._still_checkpoint["traj_std"], dtype=np.float32)
+    #
+    #     delta_pos_norm = (np.array(delta_pos, dtype=np.float32) - delta_mean) / delta_std
+    #     current_joints_norm = (np.array(current_joints, dtype=np.float32) - traj_mean) / traj_std
+    #
+    #     condition = torch.tensor(
+    #         np.concatenate([delta_pos_norm, current_joints_norm]), dtype=torch.float32
+    #     ).unsqueeze(0).to(self._device)
+    #
+    #     shape = (1, self._still_checkpoint["num_steps"], self._still_checkpoint["num_joints"])
+    #     if ddim_steps > 0:
+    #         trajectory = self._still_diffusion.ddim_sample(self._still_model, condition, shape, ddim_steps=ddim_steps)
+    #     else:
+    #         trajectory = self._still_diffusion.sample(self._still_model, condition, shape)
+    #
+    #     trajectory = trajectory.cpu().numpy()[0]
+    #     trajectory = trajectory * traj_std + traj_mean
+    #     return trajectory
+
+    def generate_trajectory(self, delta_pos: np.ndarray, current_joints: np.ndarray, ddim_steps: int = 0, device="cuda") -> np.ndarray:
         """Generate a trunk joint trajectory."""
-        delta_mean = np.array(self._checkpoint["delta_mean"], dtype=np.float32)
-        delta_std = np.array(self._checkpoint["delta_std"], dtype=np.float32)
-        traj_mean = np.array(self._checkpoint["traj_mean"], dtype=np.float32)
-        traj_std = np.array(self._checkpoint["traj_std"], dtype=np.float32)
+        return generate_trajectory_retroaction(
+            model=self._still_model,
+            diffusion=self._still_diffusion,
+            checkpoint=self._still_checkpoint,
+            delta=delta_pos,
+            current_joints=current_joints,
+            prev_joints=current_joints,
+            prev_actions=current_joints,
+            ddim_steps=ddim_steps,
+            device=device
+        )
 
-        delta_pos_norm = (np.array(delta_pos, dtype=np.float32) - delta_mean) / delta_std
-        current_joints_norm = (np.array(current_joints, dtype=np.float32) - traj_mean) / traj_std
+    # def generate_leg_step_trajectory(self, leg_idx: int, delta_foot_pos: np.ndarray,
+    #                                   current_leg_joints: np.ndarray,
+    #                                   ddim_steps: int = 0) -> np.ndarray:
+    #     """Generate a leg trajectory with mirroring for right-side legs."""
+    #     delta_mean = np.array(self._step_checkpoint["delta_mean"], dtype=np.float32)
+    #     delta_std = np.array(self._step_checkpoint["delta_std"], dtype=np.float32)
+    #     traj_mean = np.array(self._step_checkpoint["traj_mean"], dtype=np.float32)
+    #     traj_std = np.array(self._step_checkpoint["traj_std"], dtype=np.float32)
+    #
+    #     delta = np.array(delta_foot_pos, dtype=np.float32).copy()
+    #     joints = np.array(current_leg_joints, dtype=np.float32).copy()
+    #
+    #     if LEG_IS_RIGHT[leg_idx]:
+    #         delta[1] = -delta[1]
+    #         joints[0] = -joints[0]
+    #
+    #     delta_pos_norm = (delta - delta_mean) / delta_std
+    #     current_joints_norm = (joints - traj_mean) / traj_std
+    #
+    #     condition = torch.tensor(
+    #         np.concatenate([delta_pos_norm, current_joints_norm]), dtype=torch.float32
+    #     ).unsqueeze(0).to(self._device)
+    #
+    #     shape = (1, self._step_checkpoint["num_steps"], self._step_checkpoint["num_joints"])
+    #     if ddim_steps > 0:
+    #         trajectory = self._step_diffusion.ddim_sample(self._step_model, condition, shape, ddim_steps=ddim_steps)
+    #     else:
+    #         trajectory = self._step_diffusion.sample(self._step_model, condition, shape)
+    #
+    #     trajectory = trajectory.cpu().numpy()[0]
+    #     trajectory = trajectory * traj_std + traj_mean
+    #
+    #     if LEG_IS_RIGHT[leg_idx]:
+    #         trajectory[:, 0] = -trajectory[:, 0]
+    #
+    #     return trajectory
 
-        condition = torch.tensor(
-            np.concatenate([delta_pos_norm, current_joints_norm]), dtype=torch.float32
-        ).unsqueeze(0).to(self._device)
-
-        shape = (1, self._checkpoint["num_steps"], self._checkpoint["num_joints"])
-        if ddim_steps > 0:
-            trajectory = self._diffusion.ddim_sample(self._model, condition, shape, ddim_steps=ddim_steps)
-        else:
-            trajectory = self._diffusion.sample(self._model, condition, shape)
-
-        trajectory = trajectory.cpu().numpy()[0]
-        trajectory = trajectory * traj_std + traj_mean
-        return trajectory
-
-    def generate_leg_step_trajectory(self, leg_idx: int, delta_foot_pos: np.ndarray,
-                                      current_leg_joints: np.ndarray,
-                                      ddim_steps: int = 0) -> np.ndarray:
+    def generate_leg_step_trajectory(self, leg_idx: int, delta_foot_pos: np.ndarray, current_leg_joints: np.ndarray, ddim_steps: int = 0) -> np.ndarray:
         """Generate a leg trajectory with mirroring for right-side legs."""
-        delta_mean = np.array(self._step_checkpoint["delta_mean"], dtype=np.float32)
-        delta_std = np.array(self._step_checkpoint["delta_std"], dtype=np.float32)
-        traj_mean = np.array(self._step_checkpoint["traj_mean"], dtype=np.float32)
-        traj_std = np.array(self._step_checkpoint["traj_std"], dtype=np.float32)
 
         delta = np.array(delta_foot_pos, dtype=np.float32).copy()
         joints = np.array(current_leg_joints, dtype=np.float32).copy()
@@ -160,21 +207,16 @@ class AlengoDiffusion:
             delta[1] = -delta[1]
             joints[0] = -joints[0]
 
-        delta_pos_norm = (delta - delta_mean) / delta_std
-        current_joints_norm = (joints - traj_mean) / traj_std
-
-        condition = torch.tensor(
-            np.concatenate([delta_pos_norm, current_joints_norm]), dtype=torch.float32
-        ).unsqueeze(0).to(self._device)
-
-        shape = (1, self._step_checkpoint["num_steps"], self._step_checkpoint["num_joints"])
-        if ddim_steps > 0:
-            trajectory = self._step_diffusion.ddim_sample(self._step_model, condition, shape, ddim_steps=ddim_steps)
-        else:
-            trajectory = self._step_diffusion.sample(self._step_model, condition, shape)
-
-        trajectory = trajectory.cpu().numpy()[0]
-        trajectory = trajectory * traj_std + traj_mean
+        trajectory =  generate_trajectory_retroaction(
+            model=self._step_model,
+            diffusion=self._step_diffusion,
+            checkpoint=self._step_checkpoint,
+            delta=delta_foot_pos,
+            current_joints=current_leg_joints,
+            prev_joints=current_leg_joints,
+            prev_actions=current_leg_joints,
+            ddim_steps=ddim_steps
+        )
 
         if LEG_IS_RIGHT[leg_idx]:
             trajectory[:, 0] = -trajectory[:, 0]

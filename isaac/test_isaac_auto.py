@@ -30,6 +30,7 @@ from isaacsim.core.utils.viewports import set_camera_view
 from isaac_aliengo import AlengoDiffusion
 from ink_kin_stance.constants import LEG_NAMES, LEG_MODEL_INDICES
 import scipy.spatial.transform as tf
+import time
 
 def quat_from_euler_rpy(roll, pitch, yaw, degrees=False):
     """Converts Euler XYZ to Quaternion (w, x, y, z)."""
@@ -60,7 +61,7 @@ class AliengoSimulation:
             prim_path="/World/aliengo",
             usd_path="../Collected_aliengo/aliengo.usd",
             name="aliengo",
-            position=np.array([0, 0, 0.55]),
+            position=np.array([0, 0, 0.3]),
             orientation=init_rot
         )
 
@@ -388,13 +389,14 @@ class AliengoSimulation:
         return trunk_active or steps_active
 
     def run(self):
-        """Main simulation loop with interactive control."""
+        """Main simulation loop with automated step execution every 5 seconds."""
         self.setup()
-        set_camera_view(
-            eye=np.array([0.0, 0.0, 6.5]),
-            target=np.array([0.0, 0.0, 1.55])
-        )
+        # set_camera_view(
+        #     eye=np.array([0.0, 0.0, 6.5]),
+        #     target=np.array([0.0, 0.0, 1.55])
+        # )
 
+        # Stabilizzazione iniziale
         for _ in range(100):
             self._world.step(render=True)
 
@@ -403,59 +405,53 @@ class AliengoSimulation:
         current_leg = 0
         state = "idle"
 
-        print("\n=== Interactive Control (vacuum cups + diagnostics) ===")
-        print("  Enter  : step current leg (trunk + step diffusion)")
-        print("  r      : reset to starting configuration")
-        print("  q      : quit")
-        print(f"  Current leg: {LEG_NAMES[current_leg]}")
-        print("=====================================================\n")
+        # Intervallo in secondi tra ogni passo
+        STEP_INTERVAL = 0.1
+        last_step_time = time.time()
 
-        # old_settings = termios.tcgetattr(sys.stdin)
+        print("\n=== Automated Step Execution (Step every 5 seconds) ===")
+        print(f"Starting with leg: {LEG_NAMES[current_leg]}")
+        print("Close the simulation window to stop.")
+        print("=======================================================\n")
+
         try:
-            # tty.setcbreak(sys.stdin.fileno())
-
             while simulation_app.is_running():
                 self._world.step(render=True)
+                current_time = time.time()
 
                 if state == "idle":
-                    # key = self._read_key_nonblocking()
-                    key = input()
-                    if key is None:
-                        continue
-
-                    if key == "q":
-                        break
-                    elif key == "r":
-                        self._execute_reset()
-                        for _ in range(50):
-                            self._world.step(render=True)
+                    # Verifica se sono trascorsi 5 secondi dall'ultimo passo completato
+                    if current_time - last_step_time >= STEP_INTERVAL:
                         self._aliengo.print_foot_status()
-                        print(f"\n[leg={LEG_NAMES[current_leg]}] Enter/r/q >")
-                    else:
-                        self._aliengo.print_foot_status()
-                        print(f"\nAdvancing with leg {LEG_NAMES[current_leg]}...")
+                        print(f"\n[AUTO] Advancing with leg {LEG_NAMES[current_leg]}...")
                         self._execute_advance(current_leg)
                         state = "advancing"
 
                 elif state == "advancing":
+                    # Attende il completamento della traiettoria corrente
                     if not self._trajectories_active():
                         self._logging_active = False
+
+                        # Step di assestamento post-movimento
                         for _ in range(50):
                             self._world.step(render=True)
 
-                        # Print diagnostic summary
+                        # Stampa report diagnostico
                         self._print_step_summary(self._stepping_leg_for_log)
 
+                        # Passa alla zampa successiva e resetta il timer
                         current_leg = (current_leg + 1) % 4
                         state = "idle"
+                        last_step_time = time.time()  # Fissa il tempo per attendere altri 5 secondi
+
                         self._aliengo.print_foot_status()
-                        print(f"\n[leg={LEG_NAMES[current_leg]}] Enter/r/q >")
+                        print(f"\nNext leg in line: {LEG_NAMES[current_leg]}. Waiting {STEP_INTERVAL} seconds...")
+
+        except KeyboardInterrupt:
+            print("\nSimulation stopped by user (Ctrl+C).")
 
         finally:
-            # termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-            pass
-
-        simulation_app.close()
+            simulation_app.close()
 
 def main():
     sim = AliengoSimulation()
