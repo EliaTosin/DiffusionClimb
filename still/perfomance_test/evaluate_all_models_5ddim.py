@@ -10,13 +10,13 @@ from ink_kin_stance.diffusion.dataset import load_and_split_data, load_and_split
 from still.still_diff_utils import set_seed
 
 """
-Evaluate all models by performing 1000 samples at 5 DDIM steps, producing a stat file and then ranking 
+Evaluate all models by performing 200000 samples at 5 DDIM steps, producing a stat file and then ranking 
 them by giving a linear weight to each column.
 """
 
 
 def evaluate_trajectories(model, diffusion, test_loader, device="cuda",
-                          num_samples=1000, dataset=None, has_retroaction=False, ddim_steps=5):
+                          num_samples=200000, dataset=None, has_retroaction=False, ddim_steps=5):
     model.eval()
     all_gt = []
     all_pred_ddim = []
@@ -118,7 +118,7 @@ def evaluate_trajectories(model, diffusion, test_loader, device="cuda",
 if __name__ == "__main__":
     set_seed()
     device = "cuda"
-    num_samples_to_test = 1000
+    num_samples_to_test = 200000
     ddim_steps_to_use = 5
 
     # Cartelle in cui cercare i modelli

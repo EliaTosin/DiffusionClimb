@@ -411,7 +411,7 @@ def generate_trajectory(model, diffusion, checkpoint, delta, current_joints, dev
     return trajectory
 
 
-def generate_trajectory_retroaction(model, diffusion, checkpoint, delta, current_joints, prev_joints, prev_actions, device="cpu", ddim_steps=0):
+def generate_trajectory_retroaction(model, diffusion, checkpoint, delta, current_joints, prev_joints, prev_actions, device="cuda", ddim_steps=0):
     """
     Generate a trajectory given delta (pos + rpy) and current joint values.
 

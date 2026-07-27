@@ -16,7 +16,7 @@ def set_seed(seed=42):
 
 
 def extract_error_distributions(model, diffusion, test_loader, device="cuda",
-                                num_samples=1000, dataset=None, has_retroaction=False, ddim_steps=5):
+                                num_samples=200000, dataset=None, has_retroaction=False, ddim_steps=5):
     model.eval()
     all_gt = []
     all_pred_ddim = []
@@ -75,7 +75,7 @@ def extract_error_distributions(model, diffusion, test_loader, device="cuda",
 
 
 def plot_error_distributions(data_dict, output_pdf="still_error_distribution.pdf"):
-    # Impostazioni stilistiche con FONT IN GRASSETTO e marcati
+    # Impostazioni stilistiche con FONT IN GRASSETTO
     plt.rcParams.update({
         'font.family': 'serif',
         'font.size': 11,
@@ -112,21 +112,23 @@ def plot_error_distributions(data_dict, output_pdf="still_error_distribution.pdf
         data = res["peak"]
         mean_val = np.mean(data)
 
-        # Istogramma
-        axes[0].hist(data, bins=bins, alpha=0.45, color=color, label=label, density=True, edgecolor='none')
+        # CALCOLO PESI PER PERCENTUALE (100 / N)
+        weights = np.ones_like(data) * 100.0 / len(data)
 
-        # Linea della Media (senza $ \mathbf{} $ per uniformare il font)
+        # Istogramma con asse Y in Percentuale
+        axes[0].hist(data, bins=bins, weights=weights, alpha=0.45, color=color, label=label, edgecolor='none')
+
+        # Linea della Media
         axes[0].axvline(mean_val, color=color, linestyle='--', linewidth=2.2,
                         label=f"{label} Mean: {mean_val:.2f}°")
 
     axes[0].set_title('Mean Peak Error (deg) Distribution', fontweight='bold', pad=10)
     axes[0].set_xlabel('Mean Peak Error (deg)', fontweight='bold')
-    axes[0].set_ylabel('Probability Density', fontweight='bold')
+    axes[0].set_ylabel('Percentage of Samples (%)', fontweight='bold')  # Asse Y in %
     axes[0].set_xticks(x_ticks)
     axes[0].set_xlim(0, max_deg)
     axes[0].grid(True, which='both')
 
-    # Legenda: applica il grassetto uniforme a TUTTI gli elementi
     axes[0].legend(frameon=True, facecolor='#fcfcfc', edgecolor='#ccc',
                    fontsize=9.5, prop={'weight': 'bold', 'size': 9.5})
 
@@ -137,25 +139,27 @@ def plot_error_distributions(data_dict, output_pdf="still_error_distribution.pdf
         data = res["final"]
         mean_val = np.mean(data)
 
-        # Istogramma
-        axes[1].hist(data, bins=bins, alpha=0.45, color=color, label=label, density=True, edgecolor='none')
+        # CALCOLO PESI PER PERCENTUALE (100 / N)
+        weights = np.ones_like(data) * 100.0 / len(data)
 
-        # Linea della Media (senza $ \mathbf{} $ per uniformare il font)
+        # Istogramma con asse Y in Percentuale
+        axes[1].hist(data, bins=bins, weights=weights, alpha=0.45, color=color, label=label, edgecolor='none')
+
+        # Linea della Media
         axes[1].axvline(mean_val, color=color, linestyle='--', linewidth=2.2,
                         label=f"{label} Mean: {mean_val:.2f}°")
 
     axes[1].set_title('Worst Final Joint Error (deg) Distribution', fontweight='bold', pad=10)
     axes[1].set_xlabel('Worst Final Error per Trajectory (deg)', fontweight='bold')
-    axes[1].set_ylabel('Probability Density', fontweight='bold')
+    axes[1].set_ylabel('Percentage of Samples (%)', fontweight='bold')  # Asse Y in %
     axes[1].set_xticks(x_ticks)
     axes[1].set_xlim(0, max_deg)
     axes[1].grid(True, which='both')
 
-    # Legenda: applica il grassetto uniforme a TUTTI gli elementi
     axes[1].legend(frameon=True, facecolor='#fcfcfc', edgecolor='#ccc',
                    fontsize=9.5, prop={'weight': 'bold', 'size': 9.5})
 
-    # Rende in GRASSETTO i tick numerici degli assi X e Y per tutti e due i subplots
+    # GRASSETTO per i tick degli assi
     for ax in axes:
         for tick in ax.get_xticklabels():
             tick.set_fontweight('bold')
@@ -164,7 +168,7 @@ def plot_error_distributions(data_dict, output_pdf="still_error_distribution.pdf
 
     plt.tight_layout()
     plt.savefig(output_pdf, dpi=300, bbox_inches='tight')
-    print(f"Grafico delle distribuzioni salvato in: {output_pdf}")
+    print(f"Grafico delle distribuzioni STILL salvato in: {output_pdf}")
     plt.show()
 
 
