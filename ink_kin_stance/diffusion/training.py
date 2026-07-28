@@ -4,7 +4,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn  # <-- AGGIUNTO
 
 from .model import ConditionalDiffusionModel, ConditionalDropOutDiffusionModel
-from .gaussian_diffusion import GaussianDiffusion
+from .gaussian_diffusion import GaussianDiffusion, WeightedMSEGaussianDiffusion
 from .dataset import load_and_split_data, load_and_split_data_history
 
 
@@ -25,6 +25,7 @@ def train(
         eta_min_factor=10,
         dropout_rate=0.1,
         retroaction=False,
+        weighted_loss=False,
         trial=None,
 ):
     print(f"Training on device: {device}")
@@ -83,7 +84,10 @@ def train(
     ema_avg_fn = get_ema_multi_avg_fn(decay=0.999)
     ema_model = AveragedModel(model, multi_avg_fn=ema_avg_fn)
 
-    diffusion = GaussianDiffusion(num_timesteps=num_timesteps, device=device)
+    if weighted_loss:
+        diffusion = WeightedMSEGaussianDiffusion(num_timesteps=num_timesteps, device=device)
+    else:
+        diffusion = GaussianDiffusion(num_timesteps=num_timesteps, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=num_epochs, eta_min=lr / eta_min_factor,
