@@ -33,3 +33,4 @@ sweep.db
 
 # ignore csv to be persisted on repo
 !still/perfomance_test/*
+!step/perfomance_test/*

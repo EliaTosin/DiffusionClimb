@@ -311,7 +311,7 @@ def evaluate_trajectories(model, diffusion, test_loader, device="cuda",
     )
 
 if __name__ == "__main__":
-    model_path = "/home/etosin/Documents/diff_stance/step/diffusion_model_retroaction_BEST.pt"
+    model_path = "models/diffusion_model_retroaction.pt"
     device = "cuda"
 
     print(f"Loading model from {model_path}...")
@@ -360,7 +360,7 @@ if __name__ == "__main__":
         plot_trajectories(
             ik_trajectory=gt_trajectories[i, :],
             diff_trajectory=pred_trajectories_ddim[i, :],
-            delta_pos=deltas[i, :],
+            delta=deltas[i, :],
             # helper_trajectory=pred_trajectories_ddim[i, :],
         )
         if i > 10:
