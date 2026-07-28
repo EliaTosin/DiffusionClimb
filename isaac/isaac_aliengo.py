@@ -34,7 +34,7 @@ class AlengoDiffusion:
     DEFAULT_JOINT_POS = np.array([
         0.0, 0.0, 0.0, 0.0,
         0.8, 0.8, 0.8, 0.8,
-        -1.5, -1.5, -1.5, -1.5,
+        -1.6, -1.6, -1.6, -1.6,
     ])
 
     def __init__(
@@ -75,7 +75,7 @@ class AlengoDiffusion:
         if still_model_path is None:
             still_model_path = os.path.join(project_root, "still", "models", "diff_model_vel_retroaction_Wloss.pt")
         if step_model_path is None:
-            step_model_path = os.path.join(project_root, "step", "models", "diffusion_model_retroaction_BEST.pt")
+            step_model_path = os.path.join(project_root, "step", "models", "diffusion_model_retroaction.pt")
 
         from still.diffusion_train import load_model as load_new_model
         self._still_model, self._still_diffusion, self._still_checkpoint = load_new_model(
@@ -197,24 +197,26 @@ class AlengoDiffusion:
     #
     #     return trajectory
 
-    def generate_leg_step_trajectory(self, leg_idx: int, delta_foot_pos: np.ndarray, current_leg_joints: np.ndarray, ddim_steps: int = 0) -> np.ndarray:
-        """Generate a leg trajectory with mirroring for right-side legs."""
-
+    def generate_leg_step_trajectory(self, leg_idx: int, delta_foot_pos: np.ndarray,
+                                     current_leg_joints: np.ndarray, ddim_steps: int = 0) -> np.ndarray:
+        """Generate a leg trajectory with correct mirroring and retroaction logic."""
         delta = np.array(delta_foot_pos, dtype=np.float32).copy()
         joints = np.array(current_leg_joints, dtype=np.float32).copy()
 
+        # Specchiamento se zampa destra
         if LEG_IS_RIGHT[leg_idx]:
             delta[1] = -delta[1]
             joints[0] = -joints[0]
 
-        trajectory =  generate_trajectory_retroaction(
+        # Passa lo stato corrente anche come storia se non hai una memoria temporale dedicata
+        trajectory = generate_trajectory_retroaction(
             model=self._step_model,
             diffusion=self._step_diffusion,
             checkpoint=self._step_checkpoint,
-            delta=delta_foot_pos,
-            current_joints=current_leg_joints,
-            prev_joints=current_leg_joints,
-            prev_actions=current_leg_joints,
+            delta=delta,  # Passa il delta CORRETTAMENTE SPECCHIATO!
+            current_joints=joints,
+            prev_joints=joints,
+            prev_actions=joints,
             ddim_steps=ddim_steps
         )
 
@@ -224,33 +226,23 @@ class AlengoDiffusion:
         return trajectory
 
     def generate_combined_trajectory(self, delta_body: np.ndarray, delta_foot: np.ndarray,
-                                      current_joints_12: np.ndarray, stepping_leg: int,
-                                      ddim_steps: int = 0) -> np.ndarray:
-        """Generate a combined trunk+step trajectory."""
-        sym_joints = current_joints_12.copy()
-        mirror = MIRROR_LEG[stepping_leg]
-        mirror_joints = current_joints_12[mirror * 3: (mirror + 1) * 3].copy()
-        mirror_joints[0] = -mirror_joints[0]
-        sym_joints[stepping_leg * 3: (stepping_leg + 1) * 3] = mirror_joints
+                                     current_joints_12: np.ndarray, stepping_leg: int,
+                                     ddim_steps: int = 0) -> np.ndarray:
+        """Generate a combined trunk+step trajectory using real current joint states."""
 
+        # 1. Traiettoria Trunk basata sugli angoli REALI del robot (senza specchiamenti artificiali)
         trunk_delta = np.concatenate([delta_body, np.zeros(3)])
-        trunk_traj = self.generate_trajectory(trunk_delta, sym_joints, ddim_steps=ddim_steps)
+        trunk_traj = self.generate_trajectory(trunk_delta, current_joints_12, ddim_steps=ddim_steps)
 
+        # 2. Traiettoria Step per la zampa attiva
         leg_joints = current_joints_12[stepping_leg * 3: (stepping_leg + 1) * 3].copy()
         step_traj = self.generate_leg_step_trajectory(
             stepping_leg, delta_foot, leg_joints, ddim_steps=ddim_steps
         )
 
+        # 3. Unione delle due traiettorie
         combined = trunk_traj.copy()
         combined[:, stepping_leg * 3: (stepping_leg + 1) * 3] = step_traj
-
-        if self._debug:
-            leg_start = combined[0, stepping_leg * 3: (stepping_leg + 1) * 3]
-            leg_end = combined[-1, stepping_leg * 3: (stepping_leg + 1) * 3]
-            print(f"\n  === TRAJECTORY DIAGNOSTIC (leg {LEG_NAMES[stepping_leg]}) ===")
-            print(f"  Step leg start: hip={leg_start[0]:+.4f} thigh={leg_start[1]:+.4f} calf={leg_start[2]:+.4f}")
-            print(f"  Step leg end:   hip={leg_end[0]:+.4f} thigh={leg_end[1]:+.4f} calf={leg_end[2]:+.4f}")
-            print(f"  ===================================\n")
 
         return combined
 
@@ -343,6 +335,9 @@ class AlengoDiffusion:
                 and self._trajectory_step < len(self._current_trajectory)):
             self._trajectory_step += 1
             if self._trajectory_step >= len(self._current_trajectory):
+                # Congela l'ultimo target teorico pulito come held position
+                if self._next_target is not None:
+                    self._held_positions = self._next_target.copy()
                 self._current_trajectory = None
 
         for leg_idx in range(4):
@@ -368,33 +363,40 @@ class AlengoDiffusion:
         t = world_tf.ExtractTranslation()
         return np.array([t[0], t[1], t[2]])
 
-    def _capture_vacuum_anchors(self, stepping_leg: Optional[int] = None):
-        """Enable/disable D6 vacuum joints. Stepping leg is freed, others locked.
-
-        Updates the joint anchor (world-frame position) to the foot's current
-        position so the foot is locked exactly where it is right now.
-        """
+    def _capture_vacuum_anchors(self, stepping_leg: Optional[int] = None, use_nominal_foot_Z = True):
         self._vacuum_stepping_leg = stepping_leg
         if not hasattr(self, '_vacuum_joints'):
             return
         stage = get_current_stage()
-        xfCache = UsdGeom.XformCache()
+
+        # IMPORTANTE: Forza il refresh della cache delle trasformate al tempo corrente
+        xfCache = UsdGeom.XformCache(Usd.TimeCode.Default())
+
         for i, joint_path in self._vacuum_joints.items():
             joint_prim = stage.GetPrimAtPath(joint_path)
             if not joint_prim.IsValid():
                 continue
             joint_api = UsdPhysics.Joint(joint_prim)
+
             if i == stepping_leg:
                 joint_api.GetJointEnabledAttr().Set(False)
             else:
-                # Update anchor to current foot world position
                 foot_prim = stage.GetPrimAtPath(self._foot_prim_paths[i])
                 foot_pose = xfCache.GetLocalToWorldTransform(foot_prim)
                 foot_pose = foot_pose.RemoveScaleShear()
+
+                # Prendi la posizione REALE al tempo corrente
                 pos = Gf.Vec3f(foot_pose.ExtractTranslation())
+                if use_nominal_foot_Z:
+                    # FORZA la coordinata Z dell'ancora al livello teorico costante del piano (es. Z_muro = 0.0)
+                    # Questo impedisce alle ancore di "inseguire" l'abbassamento del robot!
+                    pos[2] = 0.0265 / 2 # The distance from foot frame to the ground is the mesh radius
                 rot = Gf.Quatf(foot_pose.ExtractRotationQuat())
+
+                # Imposta sia LocalPos0 (World/Parent) che LocalPos1 (Child/Foot = Vec3f(0))
                 joint_api.GetLocalPos0Attr().Set(pos)
                 joint_api.GetLocalRot0Attr().Set(rot)
+                joint_api.GetLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
                 joint_api.GetJointEnabledAttr().Set(True)
 
     def _apply_vacuum_forces(self):
@@ -422,11 +424,10 @@ class AlengoDiffusion:
         self._held_positions = self._articulation_to_model_order(artic_positions)
 
     def _update_held_for_leg(self, leg_idx):
-        """Update held positions for a specific leg after its step completes."""
-        artic_positions = self.robot.get_joint_positions()
-        current = self._articulation_to_model_order(artic_positions)
-        for mi in LEG_MODEL_INDICES[leg_idx]:
-            self._held_positions[mi] = current[mi]
+        """Update held positions using the theoretical trajectory end-target (prevents PD drift)."""
+        if self._next_target is not None:
+            for mi in LEG_MODEL_INDICES[leg_idx]:
+                self._held_positions[mi] = self._next_target[mi]
 
     def forward(self, dt: float, delta_pos: Optional[np.ndarray] = None):
         """Execute one physics step with interpolated trajectory.
@@ -450,7 +451,7 @@ class AlengoDiffusion:
 
         # Interpolation: lerp between prev and next frame every physics step
         if self._prev_target is not None and self._next_target is not None:
-            alpha = self._sub_step / self._decimation
+            alpha = (self._sub_step + 1) / self._decimation
             target_pos = (1.0 - alpha) * self._prev_target + alpha * self._next_target
         elif self._next_target is not None:
             target_pos = self._next_target.copy()

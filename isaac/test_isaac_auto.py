@@ -328,9 +328,9 @@ class AliengoSimulation:
     def _execute_advance(self, current_leg):
         """Step one leg using combined trunk + step diffusion models."""
         # Both models use negative X = forward in Isaac Sim.
-        # Trunk moves 1/3 of foot step.
-        delta_foot = np.array([-0.08, 0.0, 0.0])
-        delta_body = np.array([-0.027, 0.0, 0.0])
+        # Trunk moves 1/4 of foot step.
+        delta_foot = np.array([-0.1, 0.0, 0.0])
+        delta_body = np.array([-0.025, 0.0, 0.0])
 
         artic_positions = self._aliengo.get_joint_positions()
         current_joints = self._aliengo._articulation_to_model_order(artic_positions)
@@ -406,10 +406,10 @@ class AliengoSimulation:
         state = "idle"
 
         # Intervallo in secondi tra ogni passo
-        STEP_INTERVAL = 0.1
+        STEP_INTERVAL = 3.0
         last_step_time = time.time()
 
-        print("\n=== Automated Step Execution (Step every 5 seconds) ===")
+        print(f"\n=== Automated Step Execution (Step every {STEP_INTERVAL} seconds) ===")
         print(f"Starting with leg: {LEG_NAMES[current_leg]}")
         print("Close the simulation window to stop.")
         print("=======================================================\n")
