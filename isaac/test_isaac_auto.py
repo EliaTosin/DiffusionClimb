@@ -112,13 +112,13 @@ class AliengoSimulation:
         feet = [a.get_foot_position(i) for i in range(4)]
 
         # IK comparison: solve for current body position with feet anchored
-        try:
-            q_pin = self._kin.set_body_pose(self._q_neutral.copy(), body_pos[:3])
-            q_pin = self._kin.set_joint_angles(q_pin, actuals)
-            q_ik, converged = self._kin.solve_stance(body_pos[:3])
-            ik_joints = self._kin.get_joint_angles(q_ik)
-        except Exception:
-            ik_joints = np.full(12, np.nan)
+        # try:
+        q_pin = self._kin.set_body_pose(self._q_neutral.copy(), body_pos[:3])
+        q_pin = self._kin.set_joint_angles(q_pin, actuals)
+        q_ik, converged = self._kin.solve_stance(body_pos[:3], q_init=q_pin)
+        ik_joints = self._kin.get_joint_angles(q_ik)
+        # except Exception:
+        #     ik_joints = np.full(12, np.nan)
 
         # Joint velocities
         joint_vel = a._articulation_to_model_order(a.robot.get_joint_velocities())
