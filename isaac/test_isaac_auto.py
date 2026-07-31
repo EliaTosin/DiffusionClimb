@@ -31,6 +31,7 @@ from isaac_aliengo import AlengoDiffusion
 from ink_kin_stance.constants import LEG_NAMES, LEG_MODEL_INDICES
 import scipy.spatial.transform as tf
 import time
+from still.still_diff_utils import set_seed
 
 def quat_from_euler_rpy(roll, pitch, yaw, degrees=False):
     """Converts Euler XYZ to Quaternion (w, x, y, z)."""
@@ -190,15 +191,15 @@ class AliengoSimulation:
             print(f"  {LEG_NAMES[leg]:4s} {te:10.4f} {dik_str:>11s} {sm:11.4f} {drift:8.1f} mm{marker}")
 
         # 6. Per-frame joint target trace (compact: stepping leg only)
-        sl = stepping_leg
-        ji = slice(sl * 3, sl * 3 + 3)
-        print(f"\n  Frame-by-frame {LEG_NAMES[sl]} (stepping leg):")
-        print(f"  {'frm':>4s} {'tgt_hip':>8s} {'tgt_th':>8s} {'tgt_cf':>8s} | {'act_hip':>8s} {'act_th':>8s} {'act_cf':>8s} | {'err':>6s}")
-        for f in range(min(N, 20)):
-            t = targets[f, ji]
-            a = actuals[f, ji]
-            err = np.linalg.norm(t - a)
-            print(f"  {f:4d} {t[0]:+8.4f} {t[1]:+8.4f} {t[2]:+8.4f} | {a[0]:+8.4f} {a[1]:+8.4f} {a[2]:+8.4f} | {err:6.4f}")
+        # sl = stepping_leg
+        # ji = slice(sl * 3, sl * 3 + 3)
+        # print(f"\n  Frame-by-frame {LEG_NAMES[sl]} (stepping leg):")
+        # print(f"  {'frm':>4s} {'tgt_hip':>8s} {'tgt_th':>8s} {'tgt_cf':>8s} | {'act_hip':>8s} {'act_th':>8s} {'act_cf':>8s} | {'err':>6s}")
+        # for f in range(min(N, 20)):
+        #     t = targets[f, ji]
+        #     a = actuals[f, ji]
+        #     err = np.linalg.norm(t - a)
+        #     print(f"  {f:4d} {t[0]:+8.4f} {t[1]:+8.4f} {t[2]:+8.4f} | {a[0]:+8.4f} {a[1]:+8.4f} {a[2]:+8.4f} | {err:6.4f}")
 
         # 7. Compute IK-based reference trajectory for comparison
         # This is what the joints SHOULD be if we used pure IK instead of diffusion
@@ -388,13 +389,21 @@ class AliengoSimulation:
         steps_active = any(t is not None for t in self._aliengo._step_trajectories.values())
         return trunk_active or steps_active
 
-    def run(self):
+    def run(self, mode="planar"):
         """Main simulation loop with automated step execution every 5 seconds."""
         self.setup()
-        # set_camera_view(
-        #     eye=np.array([0.0, 0.0, 6.5]),
-        #     target=np.array([0.0, 0.0, 1.55])
-        # )
+
+        if mode=="planar":
+            set_camera_view(
+                eye=np.array([0.0, 0.5, 3]),
+                target=np.array([0.0, 0.5, 0])
+            )
+        elif mode=="isometric":
+            distance = 2.0
+            set_camera_view(
+                eye=np.array([0.0 + distance, 0.5 + distance, 0.0 + distance]),  # Posizione della camera [X, Y, Z]
+                target=np.array([0.0, 0.5, 0.0])  # Centro del robot [X, Y, Z]
+            )
 
         # Stabilizzazione iniziale
         for _ in range(100):
@@ -406,8 +415,9 @@ class AliengoSimulation:
         state = "idle"
 
         # Intervallo in secondi tra ogni passo
-        STEP_INTERVAL = 3.0
+        STEP_INTERVAL = 1.0
         last_step_time = time.time()
+        set_seed()
 
         print(f"\n=== Automated Step Execution (Step every {STEP_INTERVAL} seconds) ===")
         print(f"Starting with leg: {LEG_NAMES[current_leg]}")
@@ -420,10 +430,10 @@ class AliengoSimulation:
                 current_time = time.time()
 
                 if state == "idle":
-                    # Verifica se sono trascorsi 5 secondi dall'ultimo passo completato
                     if current_time - last_step_time >= STEP_INTERVAL:
                         self._aliengo.print_foot_status()
                         print(f"\n[AUTO] Advancing with leg {LEG_NAMES[current_leg]}...")
+                        last_step_time = current_time
                         self._execute_advance(current_leg)
                         state = "advancing"
 
@@ -442,7 +452,6 @@ class AliengoSimulation:
                         # Passa alla zampa successiva e resetta il timer
                         current_leg = (current_leg + 1) % 4
                         state = "idle"
-                        last_step_time = time.time()  # Fissa il tempo per attendere altri 5 secondi
 
                         self._aliengo.print_foot_status()
                         print(f"\nNext leg in line: {LEG_NAMES[current_leg]}. Waiting {STEP_INTERVAL} seconds...")
