@@ -66,7 +66,7 @@ def plot_trajectories(
         label_helper="Diff Retroaction Wloss",
         label_vel="IK Velocity",
         in_degrees=True,
-        save_pdf = False,
+        save_pdf=False,
 ):
     scale = np.degrees(1.0) if in_degrees else 1.0
     unit_label = "Position (deg)" if in_degrees else "Position (rad)"
@@ -81,10 +81,10 @@ def plot_trajectories(
     plt.rcParams.update({
         'font.family': 'serif',
         'font.size': 11,
-        'axes.labelsize': 12,
+        'axes.labelsize': 11,
         'axes.titlesize': 11,
-        'xtick.labelsize': 10,
-        'ytick.labelsize': 10,
+        'xtick.labelsize': 9.5,
+        'ytick.labelsize': 9.5,
         'grid.linestyle': ':',
         'grid.alpha': 0.65
     })
@@ -94,7 +94,8 @@ def plot_trajectories(
     if helper_trajectory is not None:
         x_helper = np.linspace(0, 1, len(helper_trajectory))
 
-    fig, axes = plt.subplots(6, 2, figsize=(8.5, 12.5), sharex=True, sharey=False)
+    # Griglia 4 righe x 3 colonne
+    fig, axes = plt.subplots(4, 3, figsize=(12.5, 9.5), sharex=True, sharey=False)
     axes = axes.flatten()
 
     lines = []
@@ -121,18 +122,15 @@ def plot_trajectories(
                 labels.append(label_helper)
 
         # --- AGGIUNTA BADGE ERRORE FINALE ---
-        # Calcoliamo l'errore finale all'ultimo passo temporale (index -1)
         err_wloss = abs(ik_traj[-1, i] - helper_traj[-1, i]) if helper_trajectory is not None else 0
         err_ret = abs(ik_traj[-1, i] - diff_traj[-1, i])
 
-        # Testo compatto con lo scostamento finale in gradi
         err_text = f"e_fin: {err_wloss:.1f}°" if helper_trajectory is not None else f"e_fin: {err_ret:.1f}°"
 
-        # Inseriamo una box discreta in alto a sinistra di ogni grafico (coordinate trasformate dell'asse [0,1])
         axes[i].text(
             0.04, 0.86, err_text,
             transform=axes[i].transAxes,
-            fontsize=9.5, fontweight='bold',
+            fontsize=9.0, fontweight='bold',
             color='#c0392b' if helper_trajectory is not None else '#2980b9',
             bbox=dict(boxstyle='round,pad=0.2', facecolor='#fcfcfc', edgecolor='#e0e0e0', alpha=0.85)
         )
@@ -140,40 +138,40 @@ def plot_trajectories(
         axes[i].set_title(joint_name, fontweight='bold', pad=5)
         axes[i].grid(True)
 
-        if i % 2 == 0:
+        # Asse Y solo sulla prima colonna (indici 0, 3, 6, 9)
+        if i % 3 == 0:
             axes[i].set_ylabel(unit_label, fontweight='bold')
 
-    for i in range(10, 12):
+    # Asse X solo sull'ultima riga (indici 9, 10, 11)
+    for i in range(9, 12):
         axes[i].set_xlabel('Normalized Progress', fontweight='bold')
 
-    # Rende in GRASSETTO i tick numerici degli assi X e Y per tutti e due i subplots
+    # Grassetto sui tick di tutti i subplot
     for ax in axes:
         for tick in ax.get_xticklabels():
             tick.set_fontweight('bold')
         for tick in ax.get_yticklabels():
             tick.set_fontweight('bold')
 
-    # Titolo spostato leggermente più in alto
+    # Titolo generale
     title_str = (r"$\Delta$ Position target $\rightarrow$ "
                  f"X: {delta[0]:.3f} m | Y: {delta[1]:.3f} m | Z: {delta[2]:.3f} m")
     fig.suptitle(title_str, fontsize=12, fontweight='bold', y=0.985)
 
-    # Legenda sotto il titolo
+    # Legenda centrata in alto
     fig.legend(
         lines, labels,
         loc='upper center',
         ncol=len(labels),
-        bbox_to_anchor=(0.5, 0.965),
+        bbox_to_anchor=(0.5, 0.955),
         frameon=True,
         facecolor='#fcfcfc',
         edgecolor='#ccc',
-        fontsize=10.5,
         prop={'weight': 'bold', 'size': 10.5}
     )
 
-    plt.tight_layout()
-    # top=0.93 per adattare la nuova proporzione verticale
-    fig.subplots_adjust(top=0.9, bottom=0.05, hspace=0.35, wspace=0.20)
+    # Spaziature ottimizzate per 4x3
+    fig.subplots_adjust(top=0.90, bottom=0.07, left=0.07, right=0.97, hspace=0.32, wspace=0.22)
 
     if save_pdf:
         plt.savefig("wloss_vs_retro_plot.pdf", bbox_inches="tight")

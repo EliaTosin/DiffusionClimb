@@ -43,11 +43,12 @@ class AliengoSimulation:
         self._physics_rate = 200
         self._physics_dt = 1 / self._physics_rate
 
-        # Create world
+        # Create world with aligned physics and render update
         self._world = World(
             stage_units_in_meters=1.0,
             physics_dt=self._physics_dt,
             rendering_dt=1.0 / 60
+            # rendering_dt=self._physics_dt
         )
         self._world.scene.add_default_ground_plane()
 
@@ -66,7 +67,7 @@ class AliengoSimulation:
             orientation=init_rot
         )
 
-        # Pinocchio IK reference (for comparison only, not for control)
+        # Pinocchio IK reference
         self._pin_model, self._pin_data, _, _ = build_pinocchio_model()
         self._kin = QuadrupedKinematics(self._pin_model)
         self._q_neutral = build_neutral_q(self._pin_model)
@@ -76,7 +77,7 @@ class AliengoSimulation:
         self._step_log = None
         self._logging_active = False
         self._stepping_leg_for_log = 0
-        self._all_steps_data = []  # accumulated across all steps for file save
+        self._all_steps_data = []
 
     def setup(self):
         """Initialize after world is ready."""
@@ -118,8 +119,6 @@ class AliengoSimulation:
         q_pin = self._kin.set_joint_angles(q_pin, actuals)
         q_ik, converged = self._kin.solve_stance(body_pos[:3], q_init=q_pin)
         ik_joints = self._kin.get_joint_angles(q_ik)
-        # except Exception:
-        #     ik_joints = np.full(12, np.nan)
 
         # Joint velocities
         joint_vel = a._articulation_to_model_order(a.robot.get_joint_velocities())
@@ -181,26 +180,9 @@ class AliengoSimulation:
             sm = np.abs(frame_deltas[:, ji]).mean() if N > 1 else 0.0
             drift = np.linalg.norm(foot_pos[-1, leg] - foot_pos[0, leg]) * 1000
 
-            if diff_vs_ik is not None:
-                dik = diff_vs_ik[:, ji].mean()
-                dik_str = f"{dik:.4f}"
-            else:
-                dik_str = "N/A"
-
-            marker = " <<STEP" if leg == stepping_leg else ""
+            dik_str = f"{diff_vs_ik[:, ji].mean():.4f}" if diff_vs_ik is not None else "N/A"
+            marker = " (Active Swing)" if leg == stepping_leg else ""
             print(f"  {LEG_NAMES[leg]:4s} {te:10.4f} {dik_str:>11s} {sm:11.4f} {drift:8.1f} mm{marker}")
-
-        # 6. Per-frame joint target trace (compact: stepping leg only)
-        # sl = stepping_leg
-        # ji = slice(sl * 3, sl * 3 + 3)
-        # print(f"\n  Frame-by-frame {LEG_NAMES[sl]} (stepping leg):")
-        # print(f"  {'frm':>4s} {'tgt_hip':>8s} {'tgt_th':>8s} {'tgt_cf':>8s} | {'act_hip':>8s} {'act_th':>8s} {'act_cf':>8s} | {'err':>6s}")
-        # for f in range(min(N, 20)):
-        #     t = targets[f, ji]
-        #     a = actuals[f, ji]
-        #     err = np.linalg.norm(t - a)
-        #     print(f"  {f:4d} {t[0]:+8.4f} {t[1]:+8.4f} {t[2]:+8.4f} | {a[0]:+8.4f} {a[1]:+8.4f} {a[2]:+8.4f} | {err:6.4f}")
-
         # 7. Compute IK-based reference trajectory for comparison
         # This is what the joints SHOULD be if we used pure IK instead of diffusion
         ik_walk_joints = self._compute_ik_walk(stepping_leg, log)
@@ -222,7 +204,6 @@ class AliengoSimulation:
         }
         self._all_steps_data.append(step_data)
         self._save_log_file()
-
         print(f"{'=' * 70}\n")
 
     def _compute_ik_walk(self, stepping_leg, log):
@@ -321,17 +302,12 @@ class AliengoSimulation:
         np.savez(save_path, **save_dict)
         print(f"  Log saved to {save_path} ({len(self._all_steps_data)} steps)")
 
-    # def _read_key_nonblocking(self):
-    #     if select.select([sys.stdin], [], [], 0)[0]:
-    #         return sys.stdin.read(1)
-    #     return None
-
     def _execute_advance(self, current_leg):
         """Step one leg using combined trunk + step diffusion models."""
         # Both models use negative X = forward in Isaac Sim.
-        # Trunk moves 1/4 of foot step.
+        # Trunk moves 1/4 of footstep.
         delta_foot = np.array([-0.1, 0.0, 0.0])
-        delta_body = np.array([-0.025, 0.0, 0.0])
+        delta_body = np.array([-0.0, 0.0, 0.0])
 
         artic_positions = self._aliengo.get_joint_positions()
         current_joints = self._aliengo._articulation_to_model_order(artic_positions)
@@ -390,23 +366,22 @@ class AliengoSimulation:
         return trunk_active or steps_active
 
     def run(self, mode="planar"):
-        """Main simulation loop with automated step execution every 5 seconds."""
+        """Main simulation loop with automated step execution"""
         self.setup()
 
-        if mode=="planar":
-            set_camera_view(
-                eye=np.array([0.0, 0.5, 3]),
-                target=np.array([0.0, 0.5, 0])
-            )
-        elif mode=="isometric":
+        if mode == "planar":
+            set_camera_view(eye=np.array([0.0, 0.5, 3]), target=np.array([0.0, 0.5, 0]))
+        elif mode == "isometric":
             distance = 2.0
             set_camera_view(
                 eye=np.array([0.0 + distance, 0.5 + distance, 0.0 + distance]),  # Posizione della camera [X, Y, Z]
                 target=np.array([0.0, 0.5, 0.0])  # Centro del robot [X, Y, Z]
             )
+        elif mode == "lateral":
+            set_camera_view(eye=np.array([3, 0.3, 0.2]), target=np.array([0, 0.3, 0.2]))
 
-        # Stabilizzazione iniziale
-        for _ in range(100):
+        # Initial warmup
+        for _ in range(500):
             self._world.step(render=True)
 
         self._start_pos, self._start_rot = self._aliengo.get_world_pose()
@@ -414,47 +389,42 @@ class AliengoSimulation:
         current_leg = 0
         state = "idle"
 
-        # Intervallo in secondi tra ogni passo
-        STEP_INTERVAL = 1.0
-        last_step_time = time.time()
+        # Intervals
+        STEP_PAUSE_SEC = 0.15 # Time between steps
+        SETTLING_FRAMES = 10
+        settling_counter = 0
+
+        last_step_sim_time = self._world.current_time
         set_seed()
 
-        print(f"\n=== Automated Step Execution (Step every {STEP_INTERVAL} seconds) ===")
+        print(f"\n=== Fast Automated Step Execution (Pause: {STEP_PAUSE_SEC}s) ===")
         print(f"Starting with leg: {LEG_NAMES[current_leg]}")
-        print("Close the simulation window to stop.")
-        print("=======================================================\n")
+        print("=================================================================\n")
 
         try:
             while simulation_app.is_running():
                 self._world.step(render=True)
-                current_time = time.time()
+                current_sim_time = self._world.current_time
 
                 if state == "idle":
-                    if current_time - last_step_time >= STEP_INTERVAL:
-                        self._aliengo.print_foot_status()
-                        print(f"\n[AUTO] Advancing with leg {LEG_NAMES[current_leg]}...")
-                        last_step_time = current_time
+                    if current_sim_time - last_step_sim_time >= STEP_PAUSE_SEC:
+                        print(f"[AUTO] Stepping: {LEG_NAMES[current_leg]}")
                         self._execute_advance(current_leg)
                         state = "advancing"
 
                 elif state == "advancing":
-                    # Attende il completamento della traiettoria corrente
                     if not self._trajectories_active():
                         self._logging_active = False
+                        state = "settling"
+                        settling_counter = 0
 
-                        # Step di assestamento post-movimento
-                        for _ in range(50):
-                            self._world.step(render=True)
-
-                        # Stampa report diagnostico
-                        self._print_step_summary(self._stepping_leg_for_log)
-
-                        # Passa alla zampa successiva e resetta il timer
+                elif state == "settling":
+                    settling_counter += 1
+                    if settling_counter >= SETTLING_FRAMES:
+                        # self._print_step_summary(self._stepping_leg_for_log)
                         current_leg = (current_leg + 1) % 4
                         state = "idle"
-
-                        self._aliengo.print_foot_status()
-                        print(f"\nNext leg in line: {LEG_NAMES[current_leg]}. Waiting {STEP_INTERVAL} seconds...")
+                        last_step_sim_time = self._world.current_time
 
         except KeyboardInterrupt:
             print("\nSimulation stopped by user (Ctrl+C).")
@@ -462,9 +432,10 @@ class AliengoSimulation:
         finally:
             simulation_app.close()
 
+
 def main():
     sim = AliengoSimulation()
-    sim.run()
+    sim.run(mode="lateral")
 
 
 if __name__ == "__main__":

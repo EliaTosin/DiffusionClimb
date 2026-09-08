@@ -74,6 +74,9 @@ def extract_error_distributions(model, diffusion, test_loader, device="cuda",
     return peak_errors_deg, final_worst_deg
 
 
+import matplotlib.pyplot as plt
+import numpy as np
+
 def plot_error_distributions(data_dict, output_pdf="still_error_distribution.pdf"):
     # Impostazioni stilistiche con FONT IN GRASSETTO
     plt.rcParams.update({
@@ -111,20 +114,30 @@ def plot_error_distributions(data_dict, output_pdf="still_error_distribution.pdf
         label = labels_map.get(model_name, model_name)
         data = res["peak"]
         mean_val = np.mean(data)
+        median_val = np.median(data)
+        p95_val = np.percentile(data, 95)
 
-        # CALCOLO PESI PER PERCENTUALE (100 / N)
+        # Calcolo pesi per percentuale (100 / N)
         weights = np.ones_like(data) * 100.0 / len(data)
 
         # Istogramma con asse Y in Percentuale
         axes[0].hist(data, bins=bins, weights=weights, alpha=0.45, color=color, label=label, edgecolor='none')
 
-        # Linea della Media
-        axes[0].axvline(mean_val, color=color, linestyle='--', linewidth=2.2,
+        # Linea della Media (Tratteggiata)
+        axes[0].axvline(mean_val, color=color, linestyle='--', linewidth=2.0,
                         label=f"{label} Mean: {mean_val:.2f}°")
 
-    axes[0].set_title('Mean Peak Error (deg) Distribution', fontweight='bold', pad=10)
-    axes[0].set_xlabel('Mean Peak Error (deg)', fontweight='bold')
-    axes[0].set_ylabel('Percentage of Samples (%)', fontweight='bold')  # Asse Y in %
+        # Linea della Mediana (Punteggiata in Verde Palette)
+        axes[0].axvline(median_val, color="#16a085", linestyle=':', linewidth=2.0,
+                        label=f"{label} Med: {median_val:.2f}°")
+
+        # Linea del 95° Percentile (Tratto-Punto in Arancione Palette)
+        axes[0].axvline(p95_val, color="#e67e22", linestyle='-.', linewidth=2.0,
+                        label=f"{label} P95: {p95_val:.2f}°")
+
+    axes[0].set_title('Peak Error (deg) Distribution', fontweight='bold', pad=10)
+    axes[0].set_xlabel('Peak Error (deg)', fontweight='bold')
+    axes[0].set_ylabel('Percentage of Samples (%)', fontweight='bold')
     axes[0].set_xticks(x_ticks)
     axes[0].set_xlim(0, max_deg)
     axes[0].grid(True, which='both')
@@ -138,20 +151,30 @@ def plot_error_distributions(data_dict, output_pdf="still_error_distribution.pdf
         label = labels_map.get(model_name, model_name)
         data = res["final"]
         mean_val = np.mean(data)
+        median_val = np.median(data)
+        p95_val = np.percentile(data, 95)
 
-        # CALCOLO PESI PER PERCENTUALE (100 / N)
+        # Calcolo pesi per percentuale (100 / N)
         weights = np.ones_like(data) * 100.0 / len(data)
 
         # Istogramma con asse Y in Percentuale
         axes[1].hist(data, bins=bins, weights=weights, alpha=0.45, color=color, label=label, edgecolor='none')
 
-        # Linea della Media
-        axes[1].axvline(mean_val, color=color, linestyle='--', linewidth=2.2,
+        # Linea della Media (Tratteggiata)
+        axes[1].axvline(mean_val, color=color, linestyle='--', linewidth=2.0,
                         label=f"{label} Mean: {mean_val:.2f}°")
+
+        # Linea della Mediana (Punteggiata in Verde Palette)
+        axes[1].axvline(median_val, color="#16a085", linestyle=':', linewidth=2.0,
+                        label=f"{label} Med: {median_val:.2f}°")
+
+        # Linea del 95° Percentile (Tratto-Punto in Arancione Palette)
+        axes[1].axvline(p95_val, color="#e67e22", linestyle='-.', linewidth=2.0,
+                        label=f"{label} P95: {p95_val:.2f}°")
 
     axes[1].set_title('Worst Final Joint Error (deg) Distribution', fontweight='bold', pad=10)
     axes[1].set_xlabel('Worst Final Error per Trajectory (deg)', fontweight='bold')
-    axes[1].set_ylabel('Percentage of Samples (%)', fontweight='bold')  # Asse Y in %
+    axes[1].set_ylabel('Percentage of Samples (%)', fontweight='bold')
     axes[1].set_xticks(x_ticks)
     axes[1].set_xlim(0, max_deg)
     axes[1].grid(True, which='both')
@@ -159,7 +182,7 @@ def plot_error_distributions(data_dict, output_pdf="still_error_distribution.pdf
     axes[1].legend(frameon=True, facecolor='#fcfcfc', edgecolor='#ccc',
                    fontsize=9.5, prop={'weight': 'bold', 'size': 9.5})
 
-    # GRASSETTO per i tick degli assi
+    # Grassetto per i tick numerici
     for ax in axes:
         for tick in ax.get_xticklabels():
             tick.set_fontweight('bold')
@@ -180,7 +203,7 @@ if __name__ == "__main__":
 
     models_to_compare = [
         "models/diff_model_vel_retroaction_Wloss.pt",
-        "models/diff_model_vel_retroaction.pt"
+        # "models/diff_model_vel_retroaction.pt"
     ]
 
     results = {}

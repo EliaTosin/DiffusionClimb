@@ -108,6 +108,8 @@ def plot_error_distributions(data_dict, output_pdf="step_error_distribution.pdf"
         label = labels_map.get(model_name, model_name)
         data = res["peak"]
         mean_val = np.mean(data)
+        median_val = np.median(data)
+        p95_val = np.percentile(data, 95)
 
         # CALCOLO PESI PER PERCENTUALE (100 / N)
         weights = np.ones_like(data) * 100.0 / len(data)
@@ -115,12 +117,20 @@ def plot_error_distributions(data_dict, output_pdf="step_error_distribution.pdf"
         # Istogramma in Percentuale (density=False, si usano i weights)
         axes[0].hist(data, bins=bins, weights=weights, alpha=0.5, color=color, label=label, edgecolor='none')
 
-        # Linea della Media
-        axes[0].axvline(mean_val, color=color, linestyle='--', linewidth=2.2,
+        # Linea della Media (Tratteggiata)
+        axes[0].axvline(mean_val, color=color, linestyle='--', linewidth=2.0,
                         label=f"{label} Mean: {mean_val:.2f}°")
 
-    axes[0].set_title('Mean Peak Error (deg) Distribution', fontweight='bold', pad=10)
-    axes[0].set_xlabel('Mean Peak Error (deg)', fontweight='bold')
+        # Linea della Mediana (Punteggiata in Verde Palette)
+        axes[0].axvline(median_val, color="#16a085", linestyle=':', linewidth=2.0,
+                        label=f"{label} Med: {median_val:.2f}°")
+
+        # Linea del 95° Percentile
+        axes[0].axvline(p95_val, color="#e67e22", linestyle='-.', linewidth=2.0,
+                        label=f"{label} P95: {p95_val:.2f}°")
+
+    axes[0].set_title('Peak Error (deg) Distribution', fontweight='bold', pad=10)
+    axes[0].set_xlabel('Peak Error (deg)', fontweight='bold')
     axes[0].set_ylabel('Percentage of Samples (%)', fontweight='bold') # <--- Etichetta aggiornata
     axes[0].set_xticks(x_ticks)
     axes[0].set_xlim(0, max_deg)
@@ -135,6 +145,8 @@ def plot_error_distributions(data_dict, output_pdf="step_error_distribution.pdf"
         label = labels_map.get(model_name, model_name)
         data = res["final"]
         mean_val = np.mean(data)
+        median_val = np.median(data)
+        p95_val = np.percentile(data, 95)
 
         # CALCOLO PESI PER PERCENTUALE (100 / N)
         weights = np.ones_like(data) * 100.0 / len(data)
@@ -142,9 +154,17 @@ def plot_error_distributions(data_dict, output_pdf="step_error_distribution.pdf"
         # Istogramma in Percentuale (density=False, si usano i weights)
         axes[1].hist(data, bins=bins, weights=weights, alpha=0.5, color=color, label=label, edgecolor='none')
 
-        # Linea della Media
-        axes[1].axvline(mean_val, color=color, linestyle='--', linewidth=2.2,
+        # Linea della Media (Tratteggiata)
+        axes[1].axvline(mean_val, color=color, linestyle='--', linewidth=2.0,
                         label=f"{label} Mean: {mean_val:.2f}°")
+
+        # Linea della Mediana (Punteggiata)
+        axes[1].axvline(median_val, color="#16a085", linestyle=':', linewidth=2.0,
+                        label=f"{label} Med: {median_val:.2f}°")
+
+        # Linea del 95° Percentile
+        axes[1].axvline(p95_val, color="#e67e22", linestyle='-.', linewidth=2.0,
+                        label=f"{label} P95: {p95_val:.2f}°")
 
     axes[1].set_title('Worst Final Joint Error (deg) Distribution', fontweight='bold', pad=10)
     axes[1].set_xlabel('Worst Final Error per Trajectory (deg)', fontweight='bold')
