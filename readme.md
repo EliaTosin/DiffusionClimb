@@ -44,14 +44,13 @@ To isolate diffusion scheduling from neural predictions, the pipeline utilizes a
 *Below are the GIF animations displaying the robot vertical climbing execution in Isaac Sim:*
 
 #### 1. Step Execution (Close-up view of the foot swing trajectory)
-<video src="assets/step_FR_first.mp4" width="600" controls></video>
+[![Planar View](https://img.youtube.com/vi/AXn0P3tMuZM/maxresdefault.jpg)](https://www.youtube.com/watch?v=AXn0P3tMuZM)
 
 #### 2. Planar View (Top-down alignment and lateral stability)
-<video src="assets/planar_TRIM.mp4" width="600" controls></video>
+[![Planar View](https://img.youtube.com/vi/8a1du7Nt30g/maxresdefault.jpg)](https://www.youtube.com/watch?v=8a1du7Nt30g)
 
 #### 3. Isometric View (Overall progression and climbing performance)
-<video src="assets/isometric_TRIM_200Hz.mp4" width="600" controls></video>
-
+[![Isometric View](https://img.youtube.com/vi/EX0Lxk-caRs/maxresdefault.jpg)](https://www.youtube.com/watch?v=EX0Lxk-caRs)
 ---
 
 ### 📊 Performance Plots
